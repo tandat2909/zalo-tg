@@ -13,6 +13,7 @@ import { applyMentionsHtml, applyZaloMarkupHtml, formatGroupMsgHtml, formatGroup
 import type { ZaloStyle } from '../utils/format.js';
 import { msgStore, userCache, pollStore, sentMsgStore, zaloAlbumStore, reactionEchoStore, reactionSummaryStore, aliasCache, type ZaloQuoteData } from '../store.js';
 import { tgQueue } from '../utils/tgQueue.js';
+import { reminderTracker } from '../reminders.js';
 
 // Proxy that routes every tg.* call through the rate-limit queue
 // so 429 errors are auto-retried instead of crashing the process.
@@ -406,6 +407,8 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
         const isEcho =
           selfMsgIds.some(id => sentMsgStore.getByZaloMsgId(id) !== undefined)
           || sentMsgStore.isSendingTo(msg.threadId);
+        // Owner has replied (echo of TG→Zalo or direct from Zalo app) → cancel reminder
+        reminderTracker.markAnswered(msg.threadId, msg.type as 0 | 1);
         if (isEcho) {
           console.log(`[Zalo→TG] Skip bot echo (${selfMsgIds.join(', ')})`);
           return;
@@ -489,6 +492,11 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
       }
 
       const topicId = await getOrCreateTopic(zaloId, type, displayName, groupAvatarUrl);
+
+      // Customer message received → schedule "chưa trả lời" reminder if configured
+      if (!msg.isSelf) {
+        reminderTracker.trackIncoming(zaloId, type, topicId, senderName);
+      }
 
       // Resolve Telegram reply target from incoming Zalo quote (if any)
       let tgReplyMsgId: number | undefined;

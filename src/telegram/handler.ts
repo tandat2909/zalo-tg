@@ -13,6 +13,7 @@ import { config } from '../config.js';
 import { downloadToTemp, cleanTemp, convertToM4a, extractVideoThumbnail, convertWebmToGif } from '../utils/media.js';
 import { triggerQRLogin } from '../zalo/client.js';
 import { escapeHtml } from '../utils/format.js';
+import { registerReminderCommands, reminderTracker } from '../reminders.js';
 
 // Bridge start time (module load = process start)
 const _bridgeStartTime = Date.now();
@@ -295,7 +296,13 @@ export function setupTelegramHandler(
   let currentApi: ZaloAPI | null = initialApi;
 
   /** Exposed setter so index.ts can inject the auto-logged-in API. */
-  const setCurrentApi = (api: ZaloAPI) => { currentApi = api; };
+  const setCurrentApi = (api: ZaloAPI) => {
+    currentApi = api;
+    reminderTracker.setApi(api);
+  };
+
+  // Register /remind & /autoreply alongside the other bridge commands
+  registerReminderCommands(tgBot);
 
   tgBot.command('login', async (ctx) => {
     const isPrivate   = ctx.chat.type === 'private';
@@ -1326,6 +1333,13 @@ export function setupTelegramHandler(
       const { zaloId } = entry;
       // Ensure numeric value is correctly mapped to ThreadType enum at runtime
       const threadType: ThreadType = entry.type === 1 ? ThreadType.Group : ThreadType.User;
+
+      // Owner is replying via Telegram → cancel any pending "chưa trả lời" reminder.
+      // Skip if this is a bot command (those are handled separately and don't reach Zalo).
+      const _maybeText = 'text' in msg ? msg.text : undefined;
+      if (!(_maybeText && _maybeText.startsWith('/'))) {
+        reminderTracker.markAnswered(zaloId, entry.type);
+      }
 
       // Helper: send TG error notification back to the same topic
       const notifyError = async (action: string, err: unknown) => {
