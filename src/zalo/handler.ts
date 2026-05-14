@@ -495,7 +495,7 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
 
       // Customer message received → schedule "chưa trả lời" reminder if configured
       if (!msg.isSelf) {
-        reminderTracker.trackIncoming(zaloId, type, topicId, senderName);
+        reminderTracker.trackIncoming(zaloId, type, topicId, senderName, msg.data.uidFrom);
       }
 
       // Resolve Telegram reply target from incoming Zalo quote (if any)

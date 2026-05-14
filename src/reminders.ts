@@ -6,7 +6,7 @@ import { ThreadType } from 'zca-js';
 import { config } from './config.js';
 import { tgBot } from './telegram/bot.js';
 import { tgQueue } from './utils/tgQueue.js';
-import { sentMsgStore } from './store.js';
+import { sentMsgStore, msgStore, userCache } from './store.js';
 import { escapeHtml } from './utils/format.js';
 import type { ZaloAPI } from './zalo/types.js';
 
@@ -18,7 +18,8 @@ import type { ZaloAPI } from './zalo/types.js';
 //   "topics": {
 //     "<topicId>": {
 //       "minutes":   null | number,         // null = dùng default, 0 = tắt riêng
-//       "autoReply": null | string          // tin nhắn tự động gửi sang Zalo
+//       "autoReply": null | string,         // tin nhắn tự động gửi sang Zalo
+//       "accounts":  string[]               // whitelist Zalo uid; rỗng = nhắc tất cả
 //     }
 //   }
 // }
@@ -26,6 +27,7 @@ import type { ZaloAPI } from './zalo/types.js';
 interface TopicReminderConfig {
   minutes?:   number | null;
   autoReply?: string | null;
+  accounts?:  string[];
 }
 
 interface ReminderState {
@@ -91,6 +93,49 @@ export const reminderConfig = {
   getAutoReply(topicId: number): string | null {
     return _state.topics[String(topicId)]?.autoReply ?? null;
   },
+
+  /** Returns the (deduped) whitelist of Zalo uids for which this topic should remind. */
+  getAccounts(topicId: number): string[] {
+    return _state.topics[String(topicId)]?.accounts ?? [];
+  },
+
+  /** Add a Zalo uid to the whitelist. Returns true if it was newly added. */
+  addAccount(topicId: number, uid: string): boolean {
+    const key = String(topicId);
+    const t = _state.topics[key] ?? {};
+    const cur = t.accounts ?? [];
+    if (cur.includes(uid)) return false;
+    _state.topics[key] = { ...t, accounts: [...cur, uid] };
+    _persist(_state);
+    return true;
+  },
+
+  /** Remove a uid from the whitelist. Returns true if it was actually present. */
+  removeAccount(topicId: number, uid: string): boolean {
+    const key = String(topicId);
+    const t = _state.topics[key];
+    const cur = t?.accounts ?? [];
+    if (!cur.includes(uid)) return false;
+    _state.topics[key] = { ...(t ?? {}), accounts: cur.filter(u => u !== uid) };
+    _persist(_state);
+    return true;
+  },
+
+  /** Reset the whitelist to empty (= remind for any sender). */
+  clearAccounts(topicId: number): void {
+    const key = String(topicId);
+    const t = _state.topics[key];
+    if (!t) return;
+    _state.topics[key] = { ...t, accounts: [] };
+    _persist(_state);
+  },
+
+  /** True if the topic has no whitelist (allow all) OR `uid` is in the whitelist. */
+  shouldRemindForUid(topicId: number, uid: string | undefined): boolean {
+    const list = _state.topics[String(topicId)]?.accounts;
+    if (!list || list.length === 0) return true;
+    return !!uid && list.includes(uid);
+  },
 };
 
 // ── Tracker ──────────────────────────────────────────────────────────────────
@@ -128,10 +173,18 @@ export const reminderTracker = {
    * Schedule a reminder for an incoming customer message.
    * Called once per Zalo message after it has been forwarded to TG.
    * Any previous pending reminder for the same conversation is replaced.
+   * If the topic has an account whitelist, only senders on it trigger a timer.
    */
-  trackIncoming(zaloId: string, type: 0 | 1, topicId: number, senderName: string): void {
+  trackIncoming(
+    zaloId: string,
+    type: 0 | 1,
+    topicId: number,
+    senderName: string,
+    senderUid: string | undefined,
+  ): void {
     const minutes = reminderConfig.effectiveMinutes(topicId);
     if (!minutes || minutes <= 0) return;
+    if (!reminderConfig.shouldRemindForUid(topicId, senderUid)) return;
 
     const k = _key(zaloId, type);
     const existing = _pending.get(k);
@@ -214,7 +267,16 @@ const REMIND_HELP =
 <code>/remind off</code>                — tắt cho topic này
 <code>/remind clear</code>              — bỏ override, dùng mặc định
 <code>/remind default &lt;phút&gt;</code> — đặt mặc định cho mọi topic (0=tắt)
+<code>/remind who …</code>              — chọn account Zalo cần nhắc (xem <code>/remind who</code>)
 <code>/remind status</code>             — xem cấu hình hiện tại`;
+
+const REMIND_WHO_HELP =
+`📖 <b>Lọc account Zalo cần nhắc</b>
+<code>/remind who add</code> (reply tin của khách) — chỉ nhắc khi tin đến từ account này
+<code>/remind who add &lt;uid&gt;</code>
+<code>/remind who remove</code> (reply hoặc <code>&lt;uid&gt;</code>)
+<code>/remind who list</code>
+<code>/remind who clear</code> — bỏ lọc, nhắc cho mọi tin nhắn`;
 
 const AUTOREPLY_HELP =
 `📖 <b>Lệnh auto-reply</b>
@@ -258,6 +320,13 @@ export function registerReminderCommands(bot: Telegraf): void {
         lines.push(`Topic này: <b>${eff ? eff + ' phút' : 'tắt'}</b>${hasOverride ? ' <i>(override)</i>' : ''}`);
         const ar = reminderConfig.getAutoReply(topicId);
         lines.push(`Auto-reply: ${ar ? `<i>${escapeHtml(ar)}</i>` : '<b>tắt</b>'}`);
+        const accs = reminderConfig.getAccounts(topicId);
+        if (accs.length === 0) {
+          lines.push(`Lọc account: <b>tất cả tin nhắn</b>`);
+        } else {
+          const names = accs.map(uid => userCache.getName(uid) || uid).map(escapeHtml).join(', ');
+          lines.push(`Lọc account (${accs.length}): ${names}`);
+        }
       }
       await ctx.telegram.sendMessage(ctx.chat.id, lines.join('\n'), opts);
       return;
@@ -267,6 +336,80 @@ export function registerReminderCommands(bot: Telegraf): void {
       await ctx.telegram.sendMessage(ctx.chat.id,
         '⚠️ Lệnh này phải gửi trong một topic. Dùng <code>/remind default &lt;phút&gt;</code> để đặt mặc định chung.',
         opts);
+      return;
+    }
+
+    if (sub === 'who') {
+      const action = (args[1] ?? 'list').toLowerCase();
+
+      if (action === 'list') {
+        const list = reminderConfig.getAccounts(topicId);
+        if (list.length === 0) {
+          await ctx.telegram.sendMessage(ctx.chat.id,
+            'Topic này đang nhắc cho <b>mọi tin nhắn</b> (chưa lọc account).\n' +
+            'Reply vào tin của khách rồi gõ <code>/remind who add</code> để chỉ nhắc cho account đó.',
+            opts);
+          return;
+        }
+        const lines = list.map(uid => {
+          const name = userCache.getName(uid);
+          return name
+            ? `• <b>${escapeHtml(name)}</b> — <code>${uid}</code>`
+            : `• <code>${uid}</code>`;
+        });
+        await ctx.telegram.sendMessage(ctx.chat.id,
+          `Đang nhắc cho <b>${list.length}</b> account:\n${lines.join('\n')}`, opts);
+        return;
+      }
+
+      if (action === 'clear') {
+        reminderConfig.clearAccounts(topicId);
+        await ctx.telegram.sendMessage(ctx.chat.id,
+          '✅ Đã xoá danh sách lọc — topic sẽ nhắc cho mọi tin nhắn.', opts);
+        return;
+      }
+
+      if (action === 'add' || action === 'remove' || action === 'rm' || action === 'del') {
+        // Resolve uid: explicit arg OR sender of the replied-to message
+        let uid = args[2]?.trim();
+        if (!uid) {
+          const reply = 'reply_to_message' in ctx.message
+            ? (ctx.message as { reply_to_message?: { message_id: number } }).reply_to_message
+            : undefined;
+          if (reply) {
+            const quote = msgStore.getQuote(reply.message_id);
+            if (quote?.uidFrom) uid = quote.uidFrom;
+          }
+        }
+        if (!uid) {
+          await ctx.telegram.sendMessage(ctx.chat.id,
+            `❓ Reply vào một tin của khách rồi gõ <code>/remind who ${action}</code>, hoặc dùng <code>/remind who ${action} &lt;uid&gt;</code>.`,
+            opts);
+          return;
+        }
+
+        const name = userCache.getName(uid);
+        const label = name ? `<b>${escapeHtml(name)}</b> (<code>${uid}</code>)` : `<code>${uid}</code>`;
+
+        if (action === 'add') {
+          const added = reminderConfig.addAccount(topicId, uid);
+          await ctx.telegram.sendMessage(ctx.chat.id,
+            added
+              ? `✅ Đã thêm ${label} vào danh sách remind của topic này.`
+              : `ℹ️ ${label} đã có sẵn trong danh sách.`,
+            opts);
+        } else {
+          const removed = reminderConfig.removeAccount(topicId, uid);
+          await ctx.telegram.sendMessage(ctx.chat.id,
+            removed
+              ? `✅ Đã bỏ ${label} khỏi danh sách remind.`
+              : `ℹ️ ${label} không có trong danh sách.`,
+            opts);
+        }
+        return;
+      }
+
+      await ctx.telegram.sendMessage(ctx.chat.id, REMIND_WHO_HELP, opts);
       return;
     }
 
