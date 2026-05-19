@@ -6,6 +6,7 @@ import { setupTelegramHandler } from './telegram/handler.js';
 import { config } from './config.js';
 import { startUpdateChecker } from './updater.js';
 import { store } from './store.js';
+import { startOutboundServer } from './outbound-server.js';
 
 // ── Global safety net — prevent unhandled rejections from crashing ────────────
 process.on('unhandledRejection', (reason) => {
@@ -83,6 +84,8 @@ async function main(): Promise<void> {
   console.log('║   Zalo ↔ Telegram Bridge  v1.0.0    ║');
   console.log('╚══════════════════════════════════════╝');
 
+  const outboundServer = startOutboundServer();
+
   // ── Auto update checker — must register BEFORE setupTelegramHandler ─────────
   // bot.action() is middleware; the catch-all on('callback_query') in handler.ts
   // doesn't call next(), so ua: callbacks must be registered first in the chain.
@@ -111,19 +114,7 @@ async function main(): Promise<void> {
     { command: 'status',         description: 'Xem trạng thái bridge: uptime, số topic, Zalo' },
   ]).catch(() => undefined);
 
-  // ── Start Telegram bot so /login can be received immediately ───────────────
-  // NOTE: tgBot.launch() runs the polling loop forever, so we must NOT await it.
-  // The second argument callback fires once getMe() + deleteWebhook() succeed.
-  tgBot.launch({ allowedUpdates: ['message', 'callback_query', 'message_reaction', 'poll_answer', 'poll'] }, () => {
-    console.log('[Boot] Telegram bot started ✓');
-
-    syncTelegramCommands()
-      .then(() => console.log('[Boot] Telegram command menu synced ✓'))
-      .catch((err: unknown) => console.warn('[Boot] Failed to sync Telegram commands:', err));
-
-    // ── Attempt Zalo login in background ────────────────────────────────────
-    // If credentials.json exists → connects automatically and updates currentApi.
-    // If not → notifies the user to run /login.
+  const startZaloInBackground = () => {
     getZaloApi()
       .then(async (api) => {
         setZaloApi(api);   // ← inject into Telegram handler so TG→Zalo works
@@ -131,15 +122,38 @@ async function main(): Promise<void> {
       })
       .catch((err: unknown) => {
         console.warn('[Boot] Zalo auto-login failed:', err);
-        tgBot.telegram
-          .sendMessage(
-            config.telegram.groupId,
-            '⚠️ Chưa đăng nhập Zalo. Gửi <b>/login</b> để đăng nhập.',
-            { parse_mode: 'HTML' },
-          )
-          .catch(() => undefined);
+        if (config.telegram.pollingEnabled) {
+          tgBot.telegram
+            .sendMessage(
+              config.telegram.groupId,
+              '⚠️ Chưa đăng nhập Zalo. Gửi <b>/login</b> để đăng nhập.',
+              { parse_mode: 'HTML' },
+            )
+            .catch(() => undefined);
+        }
       });
-  });
+  };
+
+  // ── Start Telegram bot so /login can be received immediately ───────────────
+  // NOTE: tgBot.launch() runs the polling loop forever, so we must NOT await it.
+  // The second argument callback fires once getMe() + deleteWebhook() succeed.
+  if (config.telegram.pollingEnabled) {
+    tgBot.launch({ allowedUpdates: ['message', 'callback_query', 'message_reaction', 'poll_answer', 'poll'] }, () => {
+      console.log('[Boot] Telegram bot started ✓');
+
+      syncTelegramCommands()
+        .then(() => console.log('[Boot] Telegram command menu synced ✓'))
+        .catch((err: unknown) => console.warn('[Boot] Failed to sync Telegram commands:', err));
+
+      // ── Attempt Zalo login in background ────────────────────────────────────
+      // If credentials.json exists → connects automatically and updates currentApi.
+      // If not → notifies the user to run /login.
+      startZaloInBackground();
+    });
+  } else {
+    console.log('[Boot] Telegram polling disabled; core-system owns Telegram webhook');
+    startZaloInBackground();
+  }
 
   console.log('[Boot] Bridge is running 🚀  (Ctrl+C to stop)');
 
@@ -147,7 +161,8 @@ async function main(): Promise<void> {
   const shutdown = (signal: string) => {
     console.log(`\n[Boot] Received ${signal}, shutting down...`);
     try { getZaloApi().then(api => api.listener.stop()).catch(() => undefined); } catch { /* ignore */ }
-    tgBot.stop(signal);
+    if (config.telegram.pollingEnabled) tgBot.stop(signal);
+    outboundServer?.close();
     process.exit(0);
   };
 

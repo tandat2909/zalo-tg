@@ -36,6 +36,7 @@ export const config = {
   telegram: {
     token:       requireEnv('TG_TOKEN'),
     groupId:     Number(requireEnv('TG_GROUP_ID')),
+    pollingEnabled: envFlag('TELEGRAM_POLLING_ENABLED', true),
     /** URL của local Bot API server, ví dụ: http://localhost:8081.
      *  Chỉ dùng khi LOCAL_BOT_API=1 và TG_LOCAL_SERVER được set.
      *  Nếu không → dùng official api.telegram.org. */
@@ -50,6 +51,12 @@ export const config = {
   webhook: {
     incomingMessageUrl: process.env.INCOMING_MESSAGE_WEBHOOK_URL?.trim() || '',
     timeoutMs: envNumber('INCOMING_MESSAGE_WEBHOOK_TIMEOUT_MS', 5_000),
+  },
+  outbound: {
+    enabled: envFlag('OUTBOUND_HTTP_SERVER_ENABLED', true),
+    host: process.env.OUTBOUND_HTTP_HOST?.trim() || '0.0.0.0',
+    port: envNumber('OUTBOUND_HTTP_PORT', 3000),
+    internalToken: process.env.BRIDGE_INTERNAL_TOKEN?.trim() || '',
   },
   dataDir: resolvePath(process.env.DATA_DIR, 'data'),
 } as const;
