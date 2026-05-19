@@ -8,6 +8,7 @@ import { ZALO_MSG_TYPES } from './types.js';
 import { store } from '../store.js';
 import { tgBot } from '../telegram/bot.js';
 import { config } from '../config.js';
+import { sendIncomingMessageWebhook } from './webhook.js';
 import { downloadToTemp, cleanTemp } from '../utils/media.js';
 import { applyMentionsHtml, applyZaloMarkupHtml, formatGroupMsgHtml, formatGroupMsg, groupCaption, topicName, truncate, escapeHtml } from '../utils/format.js';
 import type { ZaloStyle } from '../utils/format.js';
@@ -561,8 +562,14 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
         zaloId,
         threadType: type,
       };
+      const notifyWebhookAfterTelegramSent = () => {
+        // Fire-and-forget after Telegram forwarding succeeds to avoid webhook loops
+        // from Zalo events that never become real forwarded messages.
+        void sendIncomingMessageWebhook(msg);
+      };
       const saveTgMapping = (sent: { message_id: number }) => {
         msgStore.save(sent.message_id, zaloMsgIds, zaloQuoteData);
+        notifyWebhookAfterTelegramSent();
       };
 
       // ── 1. Plain text ──────────────────────────────────────────────────────
@@ -647,6 +654,7 @@ ${escapeHtml(photoCaption)}`
                 // Use buf.zaloQuote which already has the correct cliMsgId and
                 // parsed media content object (not raw JSON string).
                 msgStore.save(sent.message_id, buf.zaloMsgIds, buf.zaloQuote!);
+                notifyWebhookAfterTelegramSent();
               } finally { await cleanTemp(localPath); }
             } else {
               // Multi-photo album — download all concurrently and send as media group
@@ -685,6 +693,7 @@ ${escapeHtml(photoCaption)}`
                     firstSaved = true;
                     // Use buf.zaloQuote (correct cliMsgId + parsed media object)
                     msgStore.save(sentMsgs[0]!.message_id, buf.zaloMsgIds, buf.zaloQuote!);
+                    notifyWebhookAfterTelegramSent();
                   }
                 }
               } finally {

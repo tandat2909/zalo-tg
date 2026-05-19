@@ -12,6 +12,7 @@ import { tgBot } from './bot.js';
 import { config } from '../config.js';
 import { downloadToTemp, cleanTemp, convertToM4a, extractVideoThumbnail, convertWebmToGif } from '../utils/media.js';
 import { triggerQRLogin } from '../zalo/client.js';
+import { sendTelegramToZaloWebhook } from '../zalo/webhook.js';
 import { escapeHtml } from '../utils/format.js';
 import { registerReminderCommands, reminderTracker } from '../reminders.js';
 
@@ -1366,6 +1367,31 @@ export function setupTelegramHandler(
           .catch(() => undefined);
       };
 
+      const notifyTelegramToZaloWebhook = (
+        content: string,
+        zaloMessageId?: string | number,
+        extraRaw: Record<string, unknown> = {},
+      ) => {
+        console.log('[TG→Webhook] Queue webhook after Zalo send:', {
+          content,
+          telegramMessageId: msg.message_id,
+          zaloMessageId,
+          zaloId,
+        });
+        void sendTelegramToZaloWebhook({
+          content,
+          telegramMessageId: msg.message_id,
+          zaloMessageId,
+          zaloId,
+          raw: {
+            telegram_message: msg as unknown as Record<string, unknown>,
+            zalo_id: zaloId,
+            thread_type: entry.type,
+            ...extraRaw,
+          },
+        });
+      };
+
       if ('text' in msg && msg.text) {
         // Skip bot commands that were already handled above
         if (msg.text.startsWith('/')) return;
@@ -1422,6 +1448,7 @@ export function setupTelegramHandler(
           if (zaloMsgId !== undefined) {
             sentMsgStore.save(msg.message_id, { msgId: zaloMsgId, zaloId, threadType });
           }
+          notifyTelegramToZaloWebhook(finalText, zaloMsgId, { send_result: sendResult as Record<string, unknown> });
         } catch (err) {
           await notifyError('sendMessage', err);
         } finally {
@@ -1540,6 +1567,7 @@ export function setupTelegramHandler(
           if (zaloMsgId !== undefined) {
             sentMsgStore.save(msg.message_id, { msgId: zaloMsgId, zaloId, threadType });
           }
+          notifyTelegramToZaloWebhook(effectiveCaption || `[attachment] ${filename}`, zaloMsgId, { send_result: sendResult as Record<string, unknown> });
           console.log(`[TG→Zalo] Send OK: ${filename}`);
         } catch (err) {
           await notifyError(`sendAttachment(${filename})`, err);
@@ -1612,6 +1640,7 @@ export function setupTelegramHandler(
             // We don't have a single tgMsgId here (multiple), just skip sentMsgStore
             console.log(`[TG→Zalo] Media group sent: ${localPaths.length} files, zaloMsgId=${zaloMsgId}`);
           }
+          notifyTelegramToZaloWebhook(caption || `[media_group] ${localPaths.length} files`, zaloMsgId, { send_result: sendResult as Record<string, unknown> });
         } catch (err) {
           console.error('[TG→Zalo] Media group send failed:', err);
         } finally {
@@ -1732,6 +1761,7 @@ export function setupTelegramHandler(
             if (result?.msgId !== undefined) {
               sentMsgStore.save(msg.message_id, { msgId: result.msgId, zaloId, threadType });
             }
+            notifyTelegramToZaloWebhook(cap || '[video]', result?.msgId, { send_result: result as Record<string, unknown> });
           } finally {
             sentMsgStore.unmarkSending(zaloId);
           }
@@ -1769,7 +1799,8 @@ export function setupTelegramHandler(
           const voiceUrl = uploaded[0]?.fileUrl;
           if (!voiceUrl) throw new Error('No fileUrl from uploadAttachment');
           console.log(`[TG→Zalo] Sending voice → ${voiceUrl}`);
-          await api.sendVoice({ voiceUrl }, zaloId, threadType);
+          const result = await api.sendVoice({ voiceUrl }, zaloId, threadType) as { msgId?: number } | undefined;
+          notifyTelegramToZaloWebhook('[voice]', result?.msgId, { send_result: (result ?? {}) as Record<string, unknown> });
           console.log(`[TG→Zalo] Voice sent OK`);
         } catch (err) {
           console.error('[TG→Zalo] Voice convert/send failed, falling back to file:', err);
@@ -1800,6 +1831,7 @@ export function setupTelegramHandler(
               if (zaloMsgId !== undefined) {
                 sentMsgStore.save(msg.message_id, { msgId: zaloMsgId, zaloId, threadType });
               }
+              notifyTelegramToZaloWebhook('[sticker]', zaloMsgId, { send_result: sendResult as Record<string, unknown> });
             } finally {
               sentMsgStore.unmarkSending(zaloId);
             }
@@ -1844,6 +1876,7 @@ export function setupTelegramHandler(
             zaloId,
           );
           console.log(`[TG→Zalo] Zalo poll created: pollId=${created?.poll_id}`);
+          notifyTelegramToZaloWebhook(`[poll] ${tgPoll.question}`, created?.poll_id, { send_result: created as Record<string, unknown> });
 
           // 2. Bot re-creates the same poll on TG (non-anonymous so bot gets poll_answer)
           const botPollMsg = await tgBot.telegram.sendPoll(
@@ -1921,7 +1954,9 @@ export function setupTelegramHandler(
           : `📍 ${mapsUrl}`;
         try {
           // zca-js has no sendLocation — send as plain text with coords
-          await api.sendMessage({ msg: locationLabel }, zaloId, threadType);
+          const sendResult = await api.sendMessage({ msg: locationLabel }, zaloId, threadType);
+          const zaloMsgId = sendResult?.message?.msgId;
+          notifyTelegramToZaloWebhook(locationLabel, zaloMsgId, { send_result: sendResult as Record<string, unknown> });
           console.log(`[TG→Zalo] Location sent: ${latitude},${longitude}`);
         } catch (err) {
           console.error('[TG→Zalo] Location send error:', err);
@@ -1941,7 +1976,9 @@ export function setupTelegramHandler(
         if (!cardSent) {
           const body = `👤 <b>Danh thiếp</b>\nTên: <b>${fullName}</b>\nSĐT: <code>${contact.phone_number}</code>`;
           try {
-            await api.sendMessage({ msg: `👤 ${fullName} — ${contact.phone_number}` }, zaloId, threadType);
+            const sendResult = await api.sendMessage({ msg: `👤 ${fullName} — ${contact.phone_number}` }, zaloId, threadType);
+            const zaloMsgId = sendResult?.message?.msgId;
+            notifyTelegramToZaloWebhook(`👤 ${fullName} — ${contact.phone_number}`, zaloMsgId, { send_result: sendResult as Record<string, unknown> });
           } catch (err) {
             await notifyError('sendContact', err);
           }

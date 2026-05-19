@@ -24,6 +24,14 @@ function envFlag(key: string, defaultValue = false): boolean {
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
+function envNumber(key: string, defaultValue: number): number {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric environment variable: ${key}`);
+  return parsed;
+}
+
 export const config = {
   telegram: {
     token:       requireEnv('TG_TOKEN'),
@@ -38,6 +46,10 @@ export const config = {
   zalo: {
     credentialsPath: resolvePath(process.env.ZALO_CREDENTIALS_PATH, 'credentials.json'),
     skipMutedGroups: envFlag('ZALO_SKIP_MUTED_GROUPS'),
+  },
+  webhook: {
+    incomingMessageUrl: process.env.INCOMING_MESSAGE_WEBHOOK_URL?.trim() || '',
+    timeoutMs: envNumber('INCOMING_MESSAGE_WEBHOOK_TIMEOUT_MS', 5_000),
   },
   dataDir: resolvePath(process.env.DATA_DIR, 'data'),
 } as const;
