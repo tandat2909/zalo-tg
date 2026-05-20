@@ -10,7 +10,6 @@ const localAgent = new http.Agent({ family: 4 });
 const BOT_COMMANDS = [
   { command: 'login',          description: 'Đăng nhập Zalo bằng QR' },
   { command: 'search',         description: 'Tìm tên, nhóm hoặc số điện thoại' },
-  { command: 'recall',         description: 'Thu hồi tin nhắn đã gửi sang Zalo' },
   { command: 'remind',         description: 'Nhắc nhở khi tin Zalo chưa được trả lời sau X phút' },
   { command: 'autoreply',      description: 'Đặt tin nhắn tự trả lời Zalo cho từng topic' },
   { command: 'topic',          description: 'Quản lý topic: list | info | delete' },

@@ -72,6 +72,14 @@ export function startOutboundServer(): http.Server | null {
         sendJSON(res, 200, result);
         return;
       }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/recall') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { thread_id?: string; thread_type?: 0 | 1; msg_id?: string | number; cli_msg_id?: string | number };
+        const result = await recallZalo(input.thread_id ?? '', input.thread_type ?? 0, input.msg_id ?? '', input.cli_msg_id ?? 0);
+        sendJSON(res, 200, result);
+        return;
+      }
       
       async function searchZalo(query: string, limit: number): Promise<unknown> {
         const api = await getZaloApi();
@@ -136,6 +144,16 @@ export function startOutboundServer(): http.Server | null {
           } catch { /* fallback */ }
         }
         return { ok: true, thread_id: cleanThreadId, thread_type: threadType, display_name: displayName };
+      }
+
+      async function recallZalo(threadId: string, threadType: 0 | 1, msgId: string | number, cliMsgId: string | number): Promise<unknown> {
+        const cleanThreadId = threadId.trim();
+        const cleanMsgId = String(msgId).trim();
+        if (!cleanThreadId) throw new Error('Missing thread_id');
+        if (!cleanMsgId) throw new Error('Missing msg_id');
+        const api = await getZaloApi();
+        await api.undo({ msgId: cleanMsgId, cliMsgId: cliMsgId || 0 }, cleanThreadId, threadType);
+        return { ok: true, thread_id: cleanThreadId, thread_type: threadType, msg_id: cleanMsgId };
       }
 
       sendJSON(res, 404, { ok: false, error: 'not found' });

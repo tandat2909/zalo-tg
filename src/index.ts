@@ -112,7 +112,6 @@ async function main(): Promise<void> {
     { command: 'leavegroup',     description: 'Rời nhóm Zalo & đóng topic (dùng trong topic nhóm)' },
     { command: 'friendrequests', description: 'Xem lời mời kết bạn & lời mời nhóm' },
     { command: 'topic',          description: 'Quản lý topic: list / info / delete' },
-    { command: 'recall',         description: 'Thu hồi tin nhắn (reply vào tin đã gửi)' },
     { command: 'remind',         description: 'Nhắc nhở khi tin Zalo chưa được trả lời sau X phút' },
     { command: 'autoreply',      description: 'Đặt tin nhắn tự trả lời Zalo cho từng topic' },
     { command: 'status',         description: 'Xem trạng thái bridge: uptime, số topic, Zalo' },

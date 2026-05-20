@@ -394,6 +394,7 @@ export function setupTelegramHandler(
 
   tgBot.command('recall', async (ctx) => {
     if (ctx.chat.id !== config.telegram.groupId) return;
+    if (config.core.telegramCommandTakeoverEnabled) return;
     if (!currentApi) { await ctx.reply('❌ Zalo chưa kết nối'); return; }
 
     const replyTo = 'reply_to_message' in ctx.message
