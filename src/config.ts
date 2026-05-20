@@ -58,6 +58,7 @@ export const config = {
     timeoutMs: envNumber('CORE_SYSTEM_TIMEOUT_MS', 5_000),
     zaloInboundShadowEnabled: envFlag('CORE_ZALO_INBOUND_SHADOW_ENABLED', true),
     zaloInboundTakeoverEnabled: envFlag('CORE_ZALO_INBOUND_TAKEOVER_ENABLED', true),
+    telegramCommandTakeoverEnabled: envFlag('CORE_TELEGRAM_COMMAND_TAKEOVER_ENABLED', true),
   },
   outbound: {
     enabled: envFlag('OUTBOUND_HTTP_SERVER_ENABLED', true),

@@ -324,6 +324,7 @@ export function setupTelegramHandler(
   // Usage from General:    /topic list
   tgBot.command('topic', async (ctx) => {
     if (ctx.chat.id !== config.telegram.groupId) return;
+    if (config.core.telegramCommandTakeoverEnabled) return;
     const topicId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
       : undefined;
@@ -430,6 +431,7 @@ export function setupTelegramHandler(
 
   tgBot.command('search', async (ctx) => {
     if (ctx.chat.id !== config.telegram.groupId) return;
+    if (config.core.telegramCommandTakeoverEnabled) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
       : undefined;
@@ -966,6 +968,7 @@ export function setupTelegramHandler(
 
   tgBot.on('callback_query', async (ctx) => {
     const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
+    if (config.core.telegramCommandTakeoverEnabled && (data?.startsWith('sc:') || data?.startsWith('sg:'))) return;
 
     if (data?.startsWith('lock_poll:')) {
       const pollId = Number(data.slice('lock_poll:'.length));
