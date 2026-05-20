@@ -8,13 +8,14 @@ import { ZALO_MSG_TYPES } from './types.js';
 import { store } from '../store.js';
 import { tgBot } from '../telegram/bot.js';
 import { config } from '../config.js';
-import { sendIncomingMessageWebhook } from './webhook.js';
+import { sendZaloToTelegramWebhook } from './webhook.js';
 import { downloadToTemp, cleanTemp } from '../utils/media.js';
 import { applyMentionsHtml, applyZaloMarkupHtml, formatGroupMsgHtml, formatGroupMsg, groupCaption, topicName, truncate, escapeHtml } from '../utils/format.js';
 import type { ZaloStyle } from '../utils/format.js';
 import { msgStore, userCache, pollStore, sentMsgStore, zaloAlbumStore, reactionEchoStore, reactionSummaryStore, aliasCache, type ZaloQuoteData } from '../store.js';
 import { tgQueue } from '../utils/tgQueue.js';
 import { reminderTracker } from '../reminders.js';
+import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore } from './core-events.js';
 
 // Proxy that routes every tg.* call through the rate-limit queue
 // so 429 errors are auto-retried instead of crashing the process.
@@ -349,6 +350,26 @@ function parseContent(raw: string | ZaloMediaContent | Record<string, unknown>):
   return { text: null, media: raw as ZaloMediaContent };
 }
 
+function parseWebhookForwardedContent(raw: string | ZaloMediaContent | Record<string, unknown>, msgType: string): string {
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as ZaloMediaContent;
+      return parsed.title?.trim()
+        || parsed.description?.trim()
+        || parsed.href?.trim()
+        || `[${msgType}]`;
+    } catch {
+      return raw;
+    }
+  }
+
+  const media = raw as ZaloMediaContent;
+  return media.title?.trim()
+    || media.description?.trim()
+    || media.href?.trim()
+    || `[${msgType}]`;
+}
+
 // ── Poll helpers ─────────────────────────────────────────────────────────────
 
 import type { PollOptions } from 'zca-js';
@@ -399,6 +420,12 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
 
   api.listener.on('message', async (msg: ZaloMessage) => {
     try {
+      forwardZaloMessageEventToCore(msg);
+      if (config.core.zaloInboundTakeoverEnabled) {
+        console.log(`[Zalo→Core] Takeover enabled; skip legacy TG forwarding for thread=${msg.threadId} msgId=${msg.data.msgId}`);
+        return;
+      }
+
       // Skip messages sent by the bot (TG→Zalo echo) but NOT messages
       // the user sends directly from the Zalo app.
       // We check both sentMsgStore (post-save) and isSendingTo (race window).
@@ -562,14 +589,35 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
         zaloId,
         threadType: type,
       };
-      const notifyWebhookAfterTelegramSent = () => {
+      const topicEntry = store.getEntryByTopic(topicId);
+      const buildTopicUrl = (tgTopicId: number) => `https://t.me/c/${String(config.telegram.groupId).replace('-100', '')}/${tgTopicId}`;
+      const notifyWebhookAfterTelegramSent = (sent: { message_id: number }, forwardedContent: string, extraRaw: Record<string, unknown> = {}) => {
         // Fire-and-forget after Telegram forwarding succeeds to avoid webhook loops
         // from Zalo events that never become real forwarded messages.
-        void sendIncomingMessageWebhook(msg);
+        void sendZaloToTelegramWebhook({
+          msg,
+          content: forwardedContent,
+          telegramMessageId: sent.message_id,
+          telegramGroupId: config.telegram.groupId,
+          telegramTopicId: topicId,
+          telegramTopicName: topicEntry?.name ?? displayName,
+          telegramTopicUrl: buildTopicUrl(topicId),
+          bridgeTopicEntry: topicEntry as unknown as Record<string, unknown> | undefined,
+          externalGroupId: type === ThreadType.Group ? zaloId : undefined,
+          externalGroupName: type === ThreadType.Group ? displayName : undefined,
+          threadId: zaloId,
+          threadType: type,
+          raw: {
+            forwarded_content: forwardedContent,
+            telegram_send_result: sent as unknown as Record<string, unknown>,
+            zalo_quote_data: zaloQuoteData as unknown as Record<string, unknown>,
+            ...extraRaw,
+          },
+        });
       };
-      const saveTgMapping = (sent: { message_id: number }) => {
+      const saveTgMapping = (sent: { message_id: number }, forwardedContent?: string, extraRaw: Record<string, unknown> = {}) => {
         msgStore.save(sent.message_id, zaloMsgIds, zaloQuoteData);
-        notifyWebhookAfterTelegramSent();
+        notifyWebhookAfterTelegramSent(sent, forwardedContent ?? parseWebhookForwardedContent(msg.data.content, msgType), extraRaw);
       };
 
       // ── 1. Plain text ──────────────────────────────────────────────────────
@@ -601,7 +649,7 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
           tgText,
           { ...tgBase, parse_mode: 'HTML' },
         );
-        saveTgMapping(sent);
+        saveTgMapping(sent, body);
         return;
       }
 
@@ -654,7 +702,7 @@ ${escapeHtml(photoCaption)}`
                 // Use buf.zaloQuote which already has the correct cliMsgId and
                 // parsed media content object (not raw JSON string).
                 msgStore.save(sent.message_id, buf.zaloMsgIds, buf.zaloQuote!);
-                notifyWebhookAfterTelegramSent();
+                notifyWebhookAfterTelegramSent(sent, photoCaption ?? `[${msgType}]`, { media });
               } finally { await cleanTemp(localPath); }
             } else {
               // Multi-photo album — download all concurrently and send as media group
@@ -693,7 +741,7 @@ ${escapeHtml(photoCaption)}`
                     firstSaved = true;
                     // Use buf.zaloQuote (correct cliMsgId + parsed media object)
                     msgStore.save(sentMsgs[0]!.message_id, buf.zaloMsgIds, buf.zaloQuote!);
-                    notifyWebhookAfterTelegramSent();
+                    notifyWebhookAfterTelegramSent(sentMsgs[0]!, photoCaption ?? `[${msgType}]`, { media_group_size: sentMsgs.length, media });
                   }
                 }
               } finally {
@@ -1204,6 +1252,9 @@ ${escapeHtml(photoCaption)}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   api.listener.on('undo', async (undo: any) => {
     try {
+      forwardZaloRawEventToCore('undo', undo as Record<string, unknown>);
+      if (config.core.zaloInboundTakeoverEnabled) return;
+
       const data = undo?.data;
       // The recalled Zalo message ID.
       // Group chat: content.globalMsgId is set.
@@ -1289,6 +1340,9 @@ ${escapeHtml(photoCaption)}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   api.listener.on('reaction', async (reaction: any) => {
     try {
+      forwardZaloRawEventToCore('reaction', reaction as Record<string, unknown>);
+      if (config.core.zaloInboundTakeoverEnabled) return;
+
       const data = reaction?.data;
       const rIcon: string = data?.content?.rIcon ?? '';
       const emoji = REACTION_EMOJI[rIcon] ?? rIcon;
@@ -1373,6 +1427,9 @@ ${escapeHtml(photoCaption)}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   api.listener.on('group_event', async (event: any) => {
     try {
+      forwardZaloRawEventToCore('group_event', event as Record<string, unknown>);
+      if (config.core.zaloInboundTakeoverEnabled) return;
+
       const type    = event?.type as string | undefined;
       const data    = event?.data;
       const groupId = String(event?.threadId ?? data?.groupId ?? '');
@@ -1495,6 +1552,9 @@ ${escapeHtml(photoCaption)}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   api.listener.on('friend_event', async (evt: any) => {
     try {
+      forwardZaloRawEventToCore('friend_event', evt as Record<string, unknown>);
+      if (config.core.zaloInboundTakeoverEnabled) return;
+
       // Only care about incoming friend request (someone requesting to be our friend)
       if (evt.type !== FriendEventType.REQUEST) return;
       // isSelf = we sent the request, skip

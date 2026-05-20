@@ -2,7 +2,6 @@ import { ThreadType } from 'zca-js';
 import { config } from '../config.js';
 import { getZaloApi } from '../zalo/client.js';
 import { tgBot } from '../telegram/bot.js';
-import { msgStore, sentMsgStore } from '../store.js';
 import type { ZaloAPI } from '../zalo/types.js';
 import { downloadToTemp, cleanTemp } from '../utils/media.js';
 
@@ -30,22 +29,42 @@ interface OutboundReplyTo {
   zalo_message_id?: string;
 }
 
+interface OutboundZaloQuoteData {
+  msg_id: string;
+  cli_msg_id?: string;
+  uid_from?: string;
+  ts?: string;
+  msg_type?: string;
+  content?: string | Record<string, unknown>;
+  ttl?: number;
+  zalo_id?: string;
+  thread_type?: 0 | 1;
+}
+
 export interface OutboundZaloMessageRequest {
   request_id: string;
   conversation_id: number;
   platform: string;
-  external_user_id: string;
+  external_user_id?: string;
+  thread_id?: string;
+  thread_type?: 0 | 1 | 'user' | 'group';
   telegram: OutboundTelegramInfo;
   content: OutboundContent;
   reply_to?: OutboundReplyTo;
+  quote?: OutboundZaloQuoteData;
   raw_json?: Record<string, unknown>;
 }
 
 export interface OutboundZaloMessageResponse {
   ok: boolean;
+  request_id?: string;
   zalo_message_id?: string;
+  zalo_real_message_id?: string;
+  zalo_cli_message_id?: string;
   external_user_id: string;
+  thread_id: string;
   thread_type: 'user' | 'group';
+  thread_type_value: 0 | 1;
   raw_json?: Record<string, unknown>;
 }
 
@@ -63,9 +82,22 @@ function remember(requestId: string, response: OutboundZaloMessageResponse): voi
 }
 
 function resolveThreadType(input: OutboundZaloMessageRequest): ThreadType {
-  const rawType = input.raw_json?.thread_type;
+  const rawType = input.thread_type ?? input.raw_json?.thread_type;
   if (rawType === 1 || rawType === 'group') return ThreadType.Group;
   return ThreadType.User;
+}
+
+function normalizeQuote(input?: OutboundZaloQuoteData): Record<string, unknown> | undefined {
+  if (!input?.msg_id) return undefined;
+  return {
+    msgId: input.msg_id,
+    cliMsgId: input.cli_msg_id ?? '',
+    uidFrom: input.uid_from ?? '',
+    ts: input.ts ?? '',
+    msgType: input.msg_type ?? '',
+    content: input.content ?? '',
+    ttl: input.ttl ?? 0,
+  };
 }
 
 function filenameFor(content: OutboundContent): string {
@@ -100,76 +132,77 @@ export async function sendOutboundZaloMessage(input: OutboundZaloMessageRequest)
   if (input.platform !== 'zalo') {
     throw new Error(`Unsupported platform: ${input.platform}`);
   }
-  if (!input.external_user_id) {
-    throw new Error('Missing external_user_id');
+  const zaloId = input.thread_id || input.external_user_id;
+  if (!zaloId) {
+    throw new Error('Missing thread_id');
   }
 
   const api: ZaloAPI = await getZaloApi();
-  const zaloId = input.external_user_id;
   const threadType = resolveThreadType(input);
-  const quote = input.reply_to?.telegram_message_id !== undefined
-    ? msgStore.getQuote(input.reply_to.telegram_message_id)
-    : undefined;
+  const quote = normalizeQuote(input.quote);
 
   let sendResult: any;
   let zaloMessageId: string | undefined;
+  let zaloRealMessageId: string | undefined;
+  let zaloCliMessageId: string | undefined;
 
-  sentMsgStore.markSending(zaloId);
-  try {
-    if (input.content.telegram_file_id) {
-      const localPath = await resolveTelegramFilePath(input.content);
-      try {
-        sendResult = await api.sendMessage(
-          {
-            msg: input.content.caption ?? '',
-            attachments: [localPath],
-            ...(input.content.caption && quote ? { quote } : {}),
-          },
-          zaloId,
-          threadType,
-        ).catch(async (err: unknown) => {
-          if ((err as { code?: number }).code === 114 && quote) {
-            return api.sendMessage(
-              { msg: input.content.caption ?? '', attachments: [localPath] },
-              zaloId,
-              threadType,
-            );
-          }
-          throw err;
-        });
-      } finally {
-        await cleanTemp(localPath);
-      }
-    } else {
+  if (input.content.telegram_file_id) {
+    const localPath = await resolveTelegramFilePath(input.content);
+    try {
       sendResult = await api.sendMessage(
         {
-          msg: buildText(input),
-          ...(quote ? { quote } : {}),
+          msg: input.content.caption ?? '',
+          attachments: [localPath],
+          ...(input.content.caption && quote ? { quote } : {}),
         },
         zaloId,
         threadType,
       ).catch(async (err: unknown) => {
         if ((err as { code?: number }).code === 114 && quote) {
-          return api.sendMessage({ msg: buildText(input) }, zaloId, threadType);
+          return api.sendMessage(
+            { msg: input.content.caption ?? '', attachments: [localPath] },
+            zaloId,
+            threadType,
+          );
         }
         throw err;
       });
+    } finally {
+      await cleanTemp(localPath);
     }
+  } else {
+    sendResult = await api.sendMessage(
+      {
+        msg: buildText(input),
+        ...(quote ? { quote } : {}),
+      },
+      zaloId,
+      threadType,
+    ).catch(async (err: unknown) => {
+      if ((err as { code?: number }).code === 114 && quote) {
+        return api.sendMessage({ msg: buildText(input) }, zaloId, threadType);
+      }
+      throw err;
+    });
+  }
 
-    const rawID = sendResult?.message?.msgId ?? sendResult?.attachment?.[0]?.msgId ?? sendResult?.msgId;
-    if (rawID !== undefined && rawID !== null) {
-      zaloMessageId = String(rawID);
-      sentMsgStore.save(input.telegram.message_id, { msgId: rawID, zaloId, threadType: threadType === ThreadType.Group ? 1 : 0 });
-    }
-  } finally {
-    sentMsgStore.unmarkSending(zaloId);
+  const rawID = sendResult?.message?.msgId ?? sendResult?.attachment?.[0]?.msgId ?? sendResult?.msgId;
+  if (rawID !== undefined && rawID !== null) {
+    zaloMessageId = String(rawID);
+    zaloRealMessageId = sendResult?.message?.realMsgId !== undefined ? String(sendResult.message.realMsgId) : undefined;
+    zaloCliMessageId = sendResult?.message?.cliMsgId !== undefined ? String(sendResult.message.cliMsgId) : undefined;
   }
 
   const response: OutboundZaloMessageResponse = {
     ok: true,
+    request_id: input.request_id,
     zalo_message_id: zaloMessageId,
+    zalo_real_message_id: zaloRealMessageId,
+    zalo_cli_message_id: zaloCliMessageId,
     external_user_id: zaloId,
+    thread_id: zaloId,
     thread_type: threadType === ThreadType.Group ? 'group' : 'user',
+    thread_type_value: threadType === ThreadType.Group ? 1 : 0,
     raw_json: sendResult as Record<string, unknown>,
   };
   remember(input.request_id, response);

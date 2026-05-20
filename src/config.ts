@@ -52,6 +52,13 @@ export const config = {
     incomingMessageUrl: process.env.INCOMING_MESSAGE_WEBHOOK_URL?.trim() || '',
     timeoutMs: envNumber('INCOMING_MESSAGE_WEBHOOK_TIMEOUT_MS', 5_000),
   },
+  core: {
+    baseUrl: process.env.CORE_SYSTEM_BASE_URL?.trim().replace(/\/$/, '') || '',
+    internalToken: process.env.BRIDGE_INTERNAL_TOKEN?.trim() || '',
+    timeoutMs: envNumber('CORE_SYSTEM_TIMEOUT_MS', 5_000),
+    zaloInboundShadowEnabled: envFlag('CORE_ZALO_INBOUND_SHADOW_ENABLED', true),
+    zaloInboundTakeoverEnabled: envFlag('CORE_ZALO_INBOUND_TAKEOVER_ENABLED', true),
+  },
   outbound: {
     enabled: envFlag('OUTBOUND_HTTP_SERVER_ENABLED', true),
     host: process.env.OUTBOUND_HTTP_HOST?.trim() || '0.0.0.0',

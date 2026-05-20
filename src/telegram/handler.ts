@@ -1372,21 +1372,67 @@ export function setupTelegramHandler(
         zaloMessageId?: string | number,
         extraRaw: Record<string, unknown> = {},
       ) => {
+        const telegramUser = ctx.from ? {
+          id: ctx.from.id,
+          is_bot: ctx.from.is_bot,
+          first_name: ctx.from.first_name,
+          last_name: ctx.from.last_name,
+          username: ctx.from.username,
+          language_code: ctx.from.language_code,
+        } : null;
+        const telegramChat = {
+          id: ctx.chat.id,
+          type: ctx.chat.type,
+          title: 'title' in ctx.chat ? ctx.chat.title : undefined,
+          username: 'username' in ctx.chat ? ctx.chat.username : undefined,
+        };
+        const topicName = entry.name;
+        const topicUrl = buildTopicUrl(topicId);
+        const mapping = {
+          telegram_message_id: msg.message_id,
+          telegram_chat_id: ctx.chat.id,
+          telegram_topic_id: topicId,
+          telegram_topic_name: topicName,
+          telegram_topic_url: topicUrl,
+          telegram_user: telegramUser,
+          telegram_chat: telegramChat,
+          zalo_id: zaloId,
+          zalo_thread_id: zaloId,
+          zalo_thread_type: entry.type,
+          zalo_thread_type_name: entry.type === 1 ? 'group' : 'user',
+          zalo_group_id: entry.type === 1 ? zaloId : undefined,
+          zalo_group_name: entry.type === 1 ? entry.name : undefined,
+          zalo_display_name: entry.name,
+          bridge_topic_entry: entry,
+        };
+
         console.log('[TG→Webhook] Queue webhook after Zalo send:', {
           content,
           telegramMessageId: msg.message_id,
           zaloMessageId,
           zaloId,
+          topicId,
+          topicName,
+          telegramUsername: ctx.from?.username,
+          telegramUserId: ctx.from?.id,
         });
         void sendTelegramToZaloWebhook({
           content,
           telegramMessageId: msg.message_id,
           zaloMessageId,
           zaloId,
+          externalGroupId: entry.type === 1 ? zaloId : undefined,
+          externalGroupName: entry.type === 1 ? entry.name : undefined,
+          threadId: zaloId,
+          threadType: entry.type,
           raw: {
             telegram_message: msg as unknown as Record<string, unknown>,
-            zalo_id: zaloId,
-            thread_type: entry.type,
+            telegram_user: telegramUser,
+            telegram_chat: telegramChat,
+            telegram_topic_id: topicId,
+            telegram_topic_name: topicName,
+            telegram_topic_url: topicUrl,
+            mapping,
             ...extraRaw,
           },
         });
