@@ -1206,6 +1206,7 @@ export function setupTelegramHandler(
   // Bot phải là admin và allowed_updates phải có "message_reaction"
   tgBot.on('message_reaction', async (ctx) => {
     try {
+      if (config.core.telegramCommandTakeoverEnabled) return;
       if (!currentApi) return;
       const update = ctx.messageReaction;
       if (!update) return;

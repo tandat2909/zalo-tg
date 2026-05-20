@@ -80,6 +80,14 @@ export function startOutboundServer(): http.Server | null {
         sendJSON(res, 200, result);
         return;
       }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/react') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { thread_id?: string; thread_type?: 0 | 1; msg_id?: string | number; cli_msg_id?: string | number; icon?: string };
+        const result = await reactZalo(input.thread_id ?? '', input.thread_type ?? 0, input.msg_id ?? '', input.cli_msg_id ?? 0, input.icon ?? '');
+        sendJSON(res, 200, result);
+        return;
+      }
       
       async function searchZalo(query: string, limit: number): Promise<unknown> {
         const api = await getZaloApi();
@@ -154,6 +162,25 @@ export function startOutboundServer(): http.Server | null {
         const api = await getZaloApi();
         await api.undo({ msgId: cleanMsgId, cliMsgId: cliMsgId || 0 }, cleanThreadId, threadType);
         return { ok: true, thread_id: cleanThreadId, thread_type: threadType, msg_id: cleanMsgId };
+      }
+
+      async function reactZalo(threadId: string, threadType: 0 | 1, msgId: string | number, cliMsgId: string | number, icon: string): Promise<unknown> {
+        const cleanThreadId = threadId.trim();
+        const cleanMsgId = String(msgId).trim();
+        const cleanIcon = icon.trim();
+        if (!cleanThreadId) throw new Error('Missing thread_id');
+        if (!cleanMsgId) throw new Error('Missing msg_id');
+        if (!cleanIcon) throw new Error('Missing icon');
+        const api = await getZaloApi();
+        await api.addReaction(
+          { rType: 0, source: 0, icon: cleanIcon },
+          {
+            data: { msgId: cleanMsgId, cliMsgId: cliMsgId || 0 },
+            threadId: cleanThreadId,
+            type: threadType,
+          },
+        );
+        return { ok: true, thread_id: cleanThreadId, thread_type: threadType, msg_id: cleanMsgId, icon: cleanIcon };
       }
 
       sendJSON(res, 404, { ok: false, error: 'not found' });
