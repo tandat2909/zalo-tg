@@ -84,22 +84,31 @@ function buildMessageEvent(msg: ZaloMessage): CoreZaloEventPayload {
 
 function buildRawEvent(eventType: string, event: Record<string, unknown>): CoreZaloEventPayload | null {
   const data = (event.data ?? {}) as Record<string, unknown>;
-  const threadId = String(event.threadId ?? data.groupId ?? data.threadId ?? data.fromUid ?? '');
+  const content = (data.content ?? {}) as Record<string, unknown>;
+  const threadId = String(event.threadId ?? data.groupId ?? data.threadId ?? data.idTo ?? data.fromUid ?? '');
   if (!threadId) return null;
   const rawType = event.type !== undefined ? String(event.type) : eventType;
   const senderUid = String(data.uidFrom ?? data.creatorId ?? data.sourceId ?? data.fromUid ?? '');
   const senderName = String(data.dName ?? data.senderName ?? '');
   const threadName = String(data.groupName ?? data.name ?? data.dName ?? data.senderName ?? '');
+  const rawMsgId = content.globalMsgId !== undefined && String(content.globalMsgId) !== '0'
+    ? String(content.globalMsgId)
+    : content.cliMsgId !== undefined
+      ? String(content.cliMsgId)
+      : undefined;
   return {
     event_id: `zalo:${eventType}:${threadId}:${rawType}:${Date.now()}`,
     event_type: eventType,
     thread_id: threadId,
-    thread_type: eventType === 'group_event' ? 1 : 0,
+    thread_type: eventType === 'group_event' || Boolean(event.isGroup) ? 1 : 0,
     thread_name: threadName || undefined,
     sender_uid: senderUid || undefined,
     sender_name: senderName || undefined,
     is_self: Boolean(event.isSelf),
     message: {
+      msg_id: rawMsgId,
+      cli_msg_id: content.cliMsgId !== undefined ? String(content.cliMsgId) : undefined,
+      global_msg_id: content.globalMsgId !== undefined ? String(content.globalMsgId) : rawMsgId,
       msg_type: rawType,
       content: data,
       text: typeof data.message === 'string' ? data.message : undefined,
