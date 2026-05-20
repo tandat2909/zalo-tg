@@ -398,11 +398,13 @@ const _memberCacheLoaded = new Set<string>();
 const _inFlightMsgIds = new Set<string>();
 
 export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
-  // Pre-populate userCache for all existing group topics on startup
-  for (const entry of store.all()) {
-    if (entry.type === 1 /* Group */) {
-      void populateGroupMemberCache(api, entry.zaloId);
-      _memberCacheLoaded.add(entry.zaloId);
+  // Legacy-only warmup: core owns conversation/member cache in takeover mode.
+  if (config.core.legacyStoreFallbackEnabled) {
+    for (const entry of store.all()) {
+      if (entry.type === 1 /* Group */) {
+        void populateGroupMemberCache(api, entry.zaloId);
+        _memberCacheLoaded.add(entry.zaloId);
+      }
     }
   }
 

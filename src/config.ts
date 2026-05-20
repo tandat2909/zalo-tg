@@ -36,7 +36,7 @@ export const config = {
   telegram: {
     token:       requireEnv('TG_TOKEN'),
     groupId:     Number(requireEnv('TG_GROUP_ID')),
-    pollingEnabled: envFlag('TELEGRAM_POLLING_ENABLED', true),
+    pollingEnabled: envFlag('TELEGRAM_POLLING_ENABLED', false),
     /** URL của local Bot API server, ví dụ: http://localhost:8081.
      *  Chỉ dùng khi LOCAL_BOT_API=1 và TG_LOCAL_SERVER được set.
      *  Nếu không → dùng official api.telegram.org. */
@@ -59,6 +59,7 @@ export const config = {
     zaloInboundShadowEnabled: envFlag('CORE_ZALO_INBOUND_SHADOW_ENABLED', true),
     zaloInboundTakeoverEnabled: envFlag('CORE_ZALO_INBOUND_TAKEOVER_ENABLED', true),
     telegramCommandTakeoverEnabled: envFlag('CORE_TELEGRAM_COMMAND_TAKEOVER_ENABLED', true),
+    legacyStoreFallbackEnabled: envFlag('BRIDGE_LEGACY_STORE_FALLBACK_ENABLED', false),
   },
   outbound: {
     enabled: envFlag('OUTBOUND_HTTP_SERVER_ENABLED', true),

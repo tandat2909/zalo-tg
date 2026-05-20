@@ -21,9 +21,11 @@ interface StoreData {
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
+const LEGACY_STORES_ENABLED = config.core.legacyStoreFallbackEnabled;
 const filePath = path.resolve(config.dataDir, 'topics.json');
 
 function load(): StoreData {
+  if (!LEGACY_STORES_ENABLED) return { topics: {}, zaloIndex: {} };
   if (!existsSync(filePath)) return { topics: {}, zaloIndex: {} };
   try {
     return JSON.parse(readFileSync(filePath, 'utf8')) as StoreData;
@@ -33,6 +35,7 @@ function load(): StoreData {
 }
 
 function persist(data: StoreData): void {
+  if (!LEGACY_STORES_ENABLED) return;
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
 }
@@ -144,6 +147,7 @@ interface MsgMapData {
 const _msgMapFile = path.resolve(config.dataDir, 'msg-map.json');
 
 function _loadMsgMap(): MsgMapData {
+  if (!LEGACY_STORES_ENABLED) return { pairs: [], quotes: [] };
   if (!existsSync(_msgMapFile)) return { pairs: [], quotes: [] };
   try {
     let buf = readFileSync(_msgMapFile);
@@ -181,6 +185,7 @@ function _loadMsgMap(): MsgMapData {
 
 let _msgPersistTimer: ReturnType<typeof setTimeout> | null = null;
 function _scheduleMsgPersist(): void {
+  if (!LEGACY_STORES_ENABLED) return;
   if (_msgPersistTimer) return;
   _msgPersistTimer = setTimeout(() => {
     _msgPersistTimer = null;
@@ -332,6 +337,7 @@ interface UserCacheDisk {
 }
 
 function _loadUserCache(): void {
+  if (!LEGACY_STORES_ENABLED) return;
   if (!existsSync(_userCacheFile)) return;
   try {
     const raw = JSON.parse(gunzipSync(readFileSync(_userCacheFile)).toString('utf8')) as UserCacheDisk;
@@ -354,6 +360,7 @@ let _userCacheDirty  = false;
 let _userCacheTimer: ReturnType<typeof setTimeout> | null = null;
 
 function _scheduleUserCachePersist(): void {
+  if (!LEGACY_STORES_ENABLED) return;
   _userCacheDirty = true;
   if (_userCacheTimer) return;
   _userCacheTimer = setTimeout(() => {
@@ -588,6 +595,11 @@ export const sentMsgStore = {
   isSendingTo(zaloId: string): boolean {
     const ts = _pendingSendConvos.get(zaloId);
     return ts !== undefined && Date.now() - ts < 3000;
+  },
+
+  /** Runtime-only local idempotency retained for bridge executor compatibility. */
+  rememberLocalSend(tgMsgId: number, info: SentMsgInfo): void {
+    this.save(tgMsgId, info);
   },
 };
 

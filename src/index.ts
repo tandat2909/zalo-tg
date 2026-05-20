@@ -2,10 +2,7 @@ import { getZaloApi, resetZaloApi } from './zalo/client.js';
 import { CloseReason } from 'zca-js';
 import { setupZaloHandler } from './zalo/handler.js';
 import { tgBot, syncTelegramCommands } from './telegram/bot.js';
-import { setupTelegramHandler } from './telegram/handler.js';
 import { config } from './config.js';
-import { startUpdateChecker } from './updater.js';
-import { store } from './store.js';
 import { startOutboundServer } from './outbound-server.js';
 
 // ── Global safety net — prevent unhandled rejections from crashing ────────────
@@ -22,7 +19,9 @@ let _setZaloApi: ((api: Awaited<ReturnType<typeof getZaloApi>>) => void) | null 
 // ── Boot Zalo (also used when /login swaps in a fresh API) ───────────────────
 
 async function pruneLeftGroupTopics(api: Awaited<ReturnType<typeof getZaloApi>>): Promise<void> {
+  if (!config.core.legacyStoreFallbackEnabled) return;
   try {
+    const { store } = await import('./store.js');
     const groups = await api.getAllGroups() as { gridVerMap?: Record<string, string> } | undefined;
     const activeGroupIds = new Set(Object.keys(groups?.gridVerMap ?? {}));
     const removed: string[] = [];
@@ -86,17 +85,22 @@ async function main(): Promise<void> {
 
   const outboundServer = startOutboundServer();
 
-  // ── Auto update checker — must register BEFORE setupTelegramHandler ─────────
-  // bot.action() is middleware; the catch-all on('callback_query') in handler.ts
-  // doesn't call next(), so ua: callbacks must be registered first in the chain.
-  startUpdateChecker(tgBot);
+  let setZaloApi: (api: Awaited<ReturnType<typeof getZaloApi>>) => void = () => undefined;
+  if (config.telegram.pollingEnabled) {
+    // ── Auto update checker — must register BEFORE setupTelegramHandler ───────
+    // bot.action() is middleware; the catch-all on('callback_query') in handler.ts
+    // doesn't call next(), so ua: callbacks must be registered first in the chain.
+    const { startUpdateChecker } = await import('./updater.js');
+    startUpdateChecker(tgBot);
 
-  // ── Wire up Telegram handler BEFORE launching the bot ─────────────────────
-  // setupTelegramHandler returns a setter to inject the Zalo API after auto-login.
-  const setZaloApi = setupTelegramHandler(null, async (newApi) => {
-    await startZalo(newApi, true);
-  });
-  _setZaloApi = setZaloApi;
+    // ── Wire up Telegram handler BEFORE launching the bot ───────────────────
+    // setupTelegramHandler returns a setter to inject the Zalo API after auto-login.
+    const { setupTelegramHandler } = await import('./telegram/handler.js');
+    setZaloApi = setupTelegramHandler(null, async (newApi) => {
+      await startZalo(newApi, true);
+    });
+    _setZaloApi = setZaloApi;
+  }
 
   // ── Register bot commands for Telegram menu ───────────────────────────────
   tgBot.telegram.setMyCommands([
