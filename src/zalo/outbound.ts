@@ -13,10 +13,17 @@ interface OutboundTelegramInfo {
   from_name?: string;
 }
 
+interface OutboundMention {
+  pos: number;
+  uid: string;
+  len: number;
+}
+
 interface OutboundContent {
   type: string;
   text?: string;
   caption?: string;
+  mentions?: OutboundMention[];
   telegram_file_id?: string;
   telegram_file_unique_id?: string;
   mime_type?: string;
@@ -154,13 +161,18 @@ export async function sendOutboundZaloMessage(input: OutboundZaloMessageRequest)
           msg: input.content.caption ?? '',
           attachments: [localPath],
           ...(input.content.caption && quote ? { quote } : {}),
+          ...(input.content.mentions?.length ? { mentions: input.content.mentions } : {}),
         },
         zaloId,
         threadType,
       ).catch(async (err: unknown) => {
         if ((err as { code?: number }).code === 114 && quote) {
           return api.sendMessage(
-            { msg: input.content.caption ?? '', attachments: [localPath] },
+            {
+              msg: input.content.caption ?? '',
+              attachments: [localPath],
+              ...(input.content.mentions?.length ? { mentions: input.content.mentions } : {}),
+            },
             zaloId,
             threadType,
           );
@@ -175,12 +187,16 @@ export async function sendOutboundZaloMessage(input: OutboundZaloMessageRequest)
       {
         msg: buildText(input),
         ...(quote ? { quote } : {}),
+        ...(input.content.mentions?.length ? { mentions: input.content.mentions } : {}),
       },
       zaloId,
       threadType,
     ).catch(async (err: unknown) => {
       if ((err as { code?: number }).code === 114 && quote) {
-        return api.sendMessage({ msg: buildText(input) }, zaloId, threadType);
+        return api.sendMessage({
+          msg: buildText(input),
+          ...(input.content.mentions?.length ? { mentions: input.content.mentions } : {}),
+        }, zaloId, threadType);
       }
       throw err;
     });
