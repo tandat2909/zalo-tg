@@ -89,6 +89,78 @@ export function startOutboundServer(): http.Server | null {
         return;
       }
 
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/groups/list') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { limit?: number };
+        const result = await listZaloGroups(input.limit ?? 80);
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/friends/find') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { phone?: string };
+        const result = await findZaloUser(input.phone ?? '');
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/friends/status') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { user_id?: string };
+        const result = await getFriendStatus(input.user_id ?? '');
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/friends/send') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { user_id?: string; message?: string };
+        const result = await sendFriendRequest(input.user_id ?? '', input.message ?? 'Xin chào! Mình muốn kết bạn với bạn');
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/friends/respond') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { user_id?: string; action?: string };
+        const result = await respondFriendRequest(input.user_id ?? '', input.action ?? 'accept');
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/friends/requests') {
+        await readBody(req).catch(() => '');
+        const result = await listFriendRequests();
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/groups/join-link') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { link?: string };
+        const result = await joinGroupLink(input.link ?? '');
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/groups/join-invite') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { group_id?: string };
+        const result = await joinGroupInvite(input.group_id ?? '');
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/groups/leave') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { group_id?: string };
+        const result = await leaveGroup(input.group_id ?? '');
+        sendJSON(res, 200, result);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/internal/zalo/polls') {
         const body = await readBody(req);
         const input = JSON.parse(body) as { group_id?: string; question?: string; options?: string[]; is_anonymous?: boolean; allow_multi_choices?: boolean };
@@ -213,6 +285,149 @@ export function startOutboundServer(): http.Server | null {
           },
         );
         return { ok: true, thread_id: cleanThreadId, thread_type: threadType, msg_id: cleanMsgId, icon: cleanIcon };
+      }
+
+
+      async function listZaloGroups(limit: number): Promise<unknown> {
+        const api = await getZaloApi();
+        const max = Math.min(Math.max(limit || 80, 1), 200);
+        const rawGroups = await api.getAllGroups() as { gridVerMap?: Record<string, string> } | undefined;
+        const groupIds = Object.keys(rawGroups?.gridVerMap ?? {});
+        const groups: Array<{ group_id: string; name: string; total_member: number; raw_json?: unknown }> = [];
+        for (let i = 0; i < groupIds.length && groups.length < max; i += 50) {
+          const batch = groupIds.slice(i, i + 50);
+          const info = await api.getGroupInfo(batch) as { gridInfoMap?: Record<string, { name?: string; totalMember?: number }> } | undefined;
+          for (const [groupId, group] of Object.entries(info?.gridInfoMap ?? {})) {
+            if (groups.length >= max) break;
+            groups.push({ group_id: groupId, name: group.name || groupId, total_member: Number(group.totalMember ?? 0), raw_json: group });
+          }
+        }
+        return { ok: true, groups };
+      }
+
+      function normalizeZaloUser(user: any, phone?: string): { uid: string; display_name: string; zalo_name: string; avatar: string; global_id: string; phone?: string; raw_json: unknown } {
+        return {
+          uid: String(user?.uid ?? user?.userId ?? ''),
+          display_name: String(user?.display_name ?? user?.displayName ?? ''),
+          zalo_name: String(user?.zalo_name ?? user?.zaloName ?? ''),
+          avatar: String(user?.avatar ?? ''),
+          global_id: String(user?.globalId ?? user?.global_id ?? ''),
+          ...(phone ? { phone } : {}),
+          raw_json: user,
+        };
+      }
+
+      async function findZaloUser(phone: string): Promise<unknown> {
+        const cleanPhone = phone.replace(/[^0-9+]/g, '');
+        if (!cleanPhone) throw new Error('Missing phone');
+        const api = await getZaloApi();
+        const user = await api.findUser(cleanPhone) as any;
+        return { ok: true, user: normalizeZaloUser(user, cleanPhone) };
+      }
+
+      async function getFriendStatus(userId: string): Promise<unknown> {
+        const cleanUserId = userId.trim();
+        if (!cleanUserId) throw new Error('Missing user_id');
+        const api = await getZaloApi();
+        const status = await api.getFriendRequestStatus(cleanUserId) as { is_friend?: number | boolean; is_requested?: number | boolean; is_requesting?: number | boolean } | undefined;
+        return { ok: true, is_friend: Boolean(status?.is_friend), is_requested: Boolean(status?.is_requested), is_requesting: Boolean(status?.is_requesting) };
+      }
+
+      async function sendFriendRequest(userId: string, message: string): Promise<unknown> {
+        const cleanUserId = userId.trim();
+        if (!cleanUserId) throw new Error('Missing user_id');
+        const api = await getZaloApi();
+        const raw = await api.sendFriendRequest(message || 'Xin chào! Mình muốn kết bạn với bạn', cleanUserId);
+        return { ok: true, action: 'send', user_id: cleanUserId, raw_json: raw };
+      }
+
+      async function respondFriendRequest(userId: string, action: string): Promise<unknown> {
+        const cleanUserId = userId.trim();
+        if (!cleanUserId) throw new Error('Missing user_id');
+        const api = await getZaloApi();
+        let raw: unknown;
+        if (action === 'reject') {
+          raw = await api.rejectFriendRequest(cleanUserId);
+        } else {
+          raw = await api.acceptFriendRequest(cleanUserId);
+          action = 'accept';
+        }
+        return { ok: true, action, user_id: cleanUserId, raw_json: raw };
+      }
+
+      async function listFriendRequests(): Promise<unknown> {
+        const api = await getZaloApi();
+        const [sentReqs, recvRecommends, groupInvites] = await Promise.all([
+          api.getSentFriendRequest() as Promise<Record<string, { userId?: string; zaloName?: string; displayName?: string; fReqInfo?: { message?: string } }>>,
+          api.getFriendRecommendations() as Promise<{ recommItems?: Array<{ dataInfo?: { userId?: string; zaloName?: string; displayName?: string; recommType?: number; recommInfo?: { message?: string | null } } }> }>,
+          api.getGroupInviteBoxList({ invPerPage: 20 }) as Promise<{ invitations?: Array<{ groupInfo?: { groupId?: string; name?: string; totalMember?: number } }> }>,
+        ]);
+        const sent_requests = Object.entries(sentReqs ?? {}).map(([key, value]) => ({
+          user_id: String(value.userId ?? key),
+          display_name: String(value.displayName ?? value.zaloName ?? value.userId ?? key),
+          message: String(value.fReqInfo?.message ?? ''),
+          raw_json: value,
+        }));
+        const received_requests = (recvRecommends?.recommItems ?? [])
+          .map(item => item.dataInfo)
+          .filter(info => info?.recommType === 2)
+          .map(info => ({
+            user_id: String(info?.userId ?? ''),
+            display_name: String(info?.displayName ?? info?.zaloName ?? info?.userId ?? ''),
+            message: String(info?.recommInfo?.message ?? ''),
+            raw_json: info,
+          }))
+          .filter(item => item.user_id);
+        const group_invites = (groupInvites?.invitations ?? [])
+          .map(inv => inv.groupInfo)
+          .filter(Boolean)
+          .map(group => ({
+            group_id: String(group?.groupId ?? ''),
+            name: String(group?.name ?? group?.groupId ?? ''),
+            total_member: Number(group?.totalMember ?? 0),
+            raw_json: group,
+          }))
+          .filter(item => item.group_id);
+        return { ok: true, sent_requests, received_requests, group_invites };
+      }
+
+      async function joinGroupLink(link: string): Promise<unknown> {
+        const cleanLink = link.trim();
+        if (!cleanLink) throw new Error('Missing link');
+        const api = await getZaloApi();
+        let name = '';
+        let totalMember = 0;
+        try {
+          const info = await api.getGroupLinkInfo({ link: cleanLink }) as { groupId?: string; name?: string; totalMember?: number } | undefined;
+          name = info?.name ?? '';
+          totalMember = Number(info?.totalMember ?? 0);
+        } catch { /* info is optional */ }
+        const raw = await api.joinGroupLink(cleanLink);
+        return { ok: true, name, total_member: totalMember, status: 'joined', raw_json: raw };
+      }
+
+      async function joinGroupInvite(groupId: string): Promise<unknown> {
+        const cleanGroupId = groupId.trim();
+        if (!cleanGroupId) throw new Error('Missing group_id');
+        const api = await getZaloApi();
+        const raw = await api.joinGroupInviteBox(cleanGroupId);
+        let name = '';
+        let totalMember = 0;
+        try {
+          const info = await api.getGroupInfo(cleanGroupId) as { gridInfoMap?: Record<string, { name?: string; totalMember?: number }> } | undefined;
+          const group = info?.gridInfoMap?.[cleanGroupId];
+          name = group?.name ?? '';
+          totalMember = Number(group?.totalMember ?? 0);
+        } catch { /* optional */ }
+        return { ok: true, group_id: cleanGroupId, name, total_member: totalMember, status: 'joined', raw_json: raw };
+      }
+
+      async function leaveGroup(groupId: string): Promise<unknown> {
+        const cleanGroupId = groupId.trim();
+        if (!cleanGroupId) throw new Error('Missing group_id');
+        const api = await getZaloApi();
+        const raw = await api.leaveGroup(cleanGroupId);
+        return { ok: true, action: 'leave', group_id: cleanGroupId, raw_json: raw };
       }
 
       function normalizePollDetail(pollId: number, detail: any): { ok: true; poll_id: number; options: Array<{ option_id: number; content: string; votes: number }>; closed: boolean; question?: string; allow_multi_choices?: boolean } {
