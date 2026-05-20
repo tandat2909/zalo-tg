@@ -88,6 +88,38 @@ export function startOutboundServer(): http.Server | null {
         sendJSON(res, 200, result);
         return;
       }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/polls') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { group_id?: string; question?: string; options?: string[]; is_anonymous?: boolean; allow_multi_choices?: boolean };
+        const result = await createZaloPoll(input);
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/polls/vote') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { poll_id?: number; option_ids?: number[] };
+        const result = await voteZaloPoll(input.poll_id ?? 0, input.option_ids ?? []);
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/polls/lock') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { poll_id?: number };
+        const result = await lockZaloPoll(input.poll_id ?? 0);
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/polls/detail') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { poll_id?: number };
+        const result = await getZaloPollDetail(input.poll_id ?? 0);
+        sendJSON(res, 200, result);
+        return;
+      }
       
       async function searchZalo(query: string, limit: number): Promise<unknown> {
         const api = await getZaloApi();
@@ -181,6 +213,61 @@ export function startOutboundServer(): http.Server | null {
           },
         );
         return { ok: true, thread_id: cleanThreadId, thread_type: threadType, msg_id: cleanMsgId, icon: cleanIcon };
+      }
+
+      function normalizePollDetail(pollId: number, detail: any): { ok: true; poll_id: number; options: Array<{ option_id: number; content: string; votes: number }>; closed: boolean; question?: string; allow_multi_choices?: boolean } {
+        const options = (detail?.options ?? []).map((option: any, index: number) => ({
+          option_id: Number(option?.option_id ?? option?.id ?? index),
+          content: String(option?.content ?? option?.text ?? ''),
+          votes: Number(option?.votes ?? option?.voter_count ?? 0),
+        }));
+        return {
+          ok: true,
+          poll_id: Number(detail?.poll_id ?? detail?.pollId ?? pollId),
+          question: detail?.question,
+          options,
+          closed: Boolean(detail?.closed ?? detail?.is_closed ?? false),
+          allow_multi_choices: Boolean(detail?.allow_multi_choices ?? detail?.allowMultiChoices ?? false),
+        };
+      }
+
+      async function createZaloPoll(input: { group_id?: string; question?: string; options?: string[]; is_anonymous?: boolean; allow_multi_choices?: boolean }): Promise<unknown> {
+        const groupId = String(input.group_id ?? '').trim();
+        const question = String(input.question ?? '').trim();
+        const options = (input.options ?? []).map(o => String(o).trim()).filter(Boolean);
+        if (!groupId) throw new Error('Missing group_id');
+        if (!question) throw new Error('Missing question');
+        if (options.length < 2) throw new Error('Missing options');
+        const api = await getZaloApi();
+        const created = await api.createPoll({
+          question,
+          options,
+          isAnonymous: input.is_anonymous ?? false,
+          allowMultiChoices: input.allow_multi_choices ?? false,
+        }, groupId) as any;
+        const normalized = normalizePollDetail(Number(created?.poll_id ?? created?.pollId ?? 0), created);
+        return { ...normalized, group_id: groupId };
+      }
+
+      async function voteZaloPoll(pollId: number, optionIds: number[]): Promise<unknown> {
+        if (!pollId) throw new Error('Missing poll_id');
+        const api = await getZaloApi();
+        await api.votePoll(pollId, optionIds.length === 1 ? optionIds[0] : optionIds);
+        return getZaloPollDetail(pollId);
+      }
+
+      async function lockZaloPoll(pollId: number): Promise<unknown> {
+        if (!pollId) throw new Error('Missing poll_id');
+        const api = await getZaloApi();
+        await api.lockPoll(pollId);
+        return getZaloPollDetail(pollId);
+      }
+
+      async function getZaloPollDetail(pollId: number): Promise<unknown> {
+        if (!pollId) throw new Error('Missing poll_id');
+        const api = await getZaloApi();
+        const detail = await api.getPollDetail(pollId) as any;
+        return normalizePollDetail(pollId, detail);
       }
 
       sendJSON(res, 404, { ok: false, error: 'not found' });

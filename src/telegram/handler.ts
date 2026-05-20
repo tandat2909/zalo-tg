@@ -969,7 +969,7 @@ export function setupTelegramHandler(
 
   tgBot.on('callback_query', async (ctx) => {
     const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
-    if (config.core.telegramCommandTakeoverEnabled && (data?.startsWith('sc:') || data?.startsWith('sg:'))) return;
+    if (config.core.telegramCommandTakeoverEnabled && (data?.startsWith('sc:') || data?.startsWith('sg:') || data?.startsWith('lock_poll:'))) return;
 
     if (data?.startsWith('lock_poll:')) {
       const pollId = Number(data.slice('lock_poll:'.length));
@@ -1907,6 +1907,7 @@ export function setupTelegramHandler(
       }
 
       if ('poll' in msg && msg.poll) {
+        if (config.core.telegramCommandTakeoverEnabled) return;
         const tgPoll = msg.poll;
         console.log(`[TG→Zalo] Received TG poll: id=${tgPoll.id} question="${tgPoll.question}" is_anonymous=${tgPoll.is_anonymous}`);
 
@@ -2082,6 +2083,7 @@ export function setupTelegramHandler(
 
   tgBot.on('poll', async (ctx) => {
     try {
+      if (config.core.telegramCommandTakeoverEnabled) return;
       const poll = ctx.poll;
       if (!poll.is_closed) return;
       const entry = pollStore.getByTgPollUUID(poll.id);
@@ -2094,6 +2096,7 @@ export function setupTelegramHandler(
 
   tgBot.on('poll_answer', async (ctx) => {
     try {
+      if (config.core.telegramCommandTakeoverEnabled) return;
       const answer = ctx.pollAnswer;
       // answer.option_ids: array of 0-based indices chosen in TG poll
       // answer.poll_id: TG internal poll ID (NOT the Zalo pollId)
