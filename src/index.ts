@@ -19,6 +19,8 @@ let _setZaloApi: ((api: Awaited<ReturnType<typeof getZaloApi>>) => void) | null 
 // ── Boot Zalo (also used when /login swaps in a fresh API) ───────────────────
 
 async function pruneLeftGroupTopics(api: Awaited<ReturnType<typeof getZaloApi>>): Promise<void> {
+  // Dev-only legacy cleanup. In normal core-owned mode the adapter must not load
+  // topic mappings from local JSON files.
   if (!config.core.legacyStoreFallbackEnabled) return;
   try {
     const { store } = await import('./store.js');
@@ -86,6 +88,12 @@ async function main(): Promise<void> {
   const outboundServer = startOutboundServer();
 
   let setZaloApi: (api: Awaited<ReturnType<typeof getZaloApi>>) => void = () => undefined;
+  if (config.telegram.pollingEnabled && !config.core.legacyStoreFallbackEnabled) {
+    throw new Error(
+      'TELEGRAM_POLLING_ENABLED requires BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=1 because the legacy Telegram handler depends on adapter-local mapping stores. Keep Telegram polling disabled in production core-owned mode.',
+    );
+  }
+
   if (config.telegram.pollingEnabled) {
     // ── Auto update checker — must register BEFORE setupTelegramHandler ───────
     // bot.action() is middleware; the catch-all on('callback_query') in handler.ts

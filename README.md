@@ -26,30 +26,26 @@ A bidirectional message bridge between **Zalo** and **Telegram**, implemented in
 
 ## Architecture
 
-The bridge operates as a single long-running Node.js process that simultaneously maintains:
+The production bridge is split between **core-system** and this TypeScript adapter:
 
-1. **A Telegram bot** (via [Telegraf](https://github.com/telegraf/telegraf)) connected to the Bot API using long polling.
-2. **A Zalo client** (via [zca-js](https://github.com/VolunteerSVD/zca-js)) connected to Zalo's internal WebSocket API.
+1. **core-system** owns Telegram updates, command/callback handling, topic/message/user mapping, persistence, echo suppression, and Telegram sending.
+2. **This adapter** owns only Zalo SDK login/session/listener, raw Zalo event forwarding to core-system, and Zalo SDK executor endpoints called by core-system.
 
-Both sides communicate through a set of in-memory and on-disk stores that maintain bidirectional mappings between Telegram message IDs and Zalo message IDs. This enables features such as reply chaining, message recall, and reaction forwarding.
+Adapter-local legacy stores are hard-disabled in normal mode. They are available only when `BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=1` is explicitly enabled for local debugging together with `TELEGRAM_POLLING_ENABLED=1`.
 
 ```
  Zalo WebSocket API
         |
    zalo/client.ts         (authentication, session management)
         |
-   zalo/handler.ts        (decode incoming Zalo events → Telegram)
+   zalo/handler.ts        (forward raw Zalo events to core-system)
         |
-   store.ts               (msgStore, sentMsgStore, pollStore,
-        |                  mediaGroupStore, zaloAlbumStore,
-        |                  userCache, friendsCache, topicStore)
+   outbound-server.ts     (Zalo SDK executor endpoints for core-system)
         |
-   telegram/handler.ts    (decode incoming Telegram updates → Zalo)
-        |
-   Telegram Bot API (long polling)
+   core-system            (mapping, persistence, Telegram sending, business logic)
 ```
 
-**Topic mapping** (`data/topics.json`) is persisted to disk. All message-ID mappings are kept in memory with LRU-style eviction and are lost on process restart (graceful degradation: reply chains to old messages simply omit the `reply_parameters` field).
+In normal production mode, no local JSON mapping/cache files are loaded or written by the adapter. Only Zalo SDK credential/session files and temporary runtime buffers remain adapter-owned.
 
 ---
 
@@ -159,9 +155,14 @@ TG_TOKEN=123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # Telegram supergroup ID (negative integer, e.g. -1001234567890)
 TG_GROUP_ID=-1001234567890
 
-# Directory for persistent data (topics.json, credentials.json)
-# Defaults to ./data if omitted
+# Directory for adapter-owned credential/session files and dev-only legacy stores.
+# Defaults to ./data if omitted. In production, core-system owns durable bridge state.
 DATA_DIR=./data
+
+# Production default: adapter does not poll Telegram and does not load/write legacy
+# JSON mapping/cache files. Enable both flags only for local legacy debugging.
+TELEGRAM_POLLING_ENABLED=0
+BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=0
 
 # Skip forwarding messages from muted Zalo groups
 # Defaults to false; set to true/1/yes/on to enable
@@ -181,7 +182,7 @@ npm run build
 npm start
 ```
 
-On first run with no existing `credentials.json`, send `/login` inside any topic (or the General topic) of the bridged Telegram group. The bot will send a Zalo QR code image; scan it with the Zalo mobile app under **Settings → QR Code Login**.
+In production core-owned mode, Telegram updates and `/login` are handled by core-system. If you explicitly run legacy local debugging with `TELEGRAM_POLLING_ENABLED=1` and `BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=1`, send `/login` inside any topic (or the General topic) of the bridged Telegram group on first run with no existing `credentials.json`.
 
 ---
 
@@ -284,31 +285,24 @@ For detailed installation on **macOS, Linux, Windows**, see [**Local Bot API Set
 
 ```
 src/
-├── index.ts                  Entry point. Initialises Telegraf, Zalo client,
-│                             attaches both handlers, starts polling.
+├── index.ts                  Entry point. Starts Zalo listener and outbound executor.
+│                             Telegram polling is disabled by default; core-system owns TG.
 ├── config.ts                 Reads and validates environment variables.
-├── store.ts                  All in-memory and on-disk state:
-│                               - topicStore      (persisted, topics.json)
-│                               - msgStore        (Zalo msgId ↔ TG message_id)
-│                               - sentMsgStore    (TG→Zalo msgId reverse index)
-│                               - pollStore       (poll ↔ TG poll message mapping)
-│                               - mediaGroupStore (TG media group buffer)
-│                               - zaloAlbumStore  (Zalo album buffer)
-│                               - userCache       (uid ↔ displayName)
-│                               - friendsCache    (friends list, 5-min TTL)
+├── store.ts                  Runtime-only buffers by default. Legacy JSON mapping/cache
+│                             restore/persist is dev-only behind
+│                             BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=1.
+├── outbound-server.ts        Internal Zalo SDK executor endpoints used by core-system.
 ├── telegram/
-│   ├── bot.ts                Telegraf instance; sets allowedUpdates.
-│   └── handler.ts            Processes all Telegram updates and forwards to Zalo.
-│                             Handles: text, media, voice, sticker, poll, location,
-│                             contact, reaction, callback_query, poll_answer.
+│   ├── bot.ts                Telegraf instance for legacy/local debugging.
+│   └── handler.ts            Legacy Telegram handler, loaded only when polling is enabled.
 ├── zalo/
 │   ├── client.ts             Zalo API initialisation and QR login flow.
+│   ├── core-events.ts        Raw Zalo event forwarder to core-system.
+│   ├── outbound.ts           Core-requested outbound Zalo message executor.
 │   ├── types.ts              TypeScript interfaces and ZALO_MSG_TYPES constant.
-│   └── handler.ts            Processes all Zalo listener events and forwards to TG.
-│                             Handles: message (all msgTypes), undo, reaction,
-│                             group_event (join/leave/poll/update_board).
+│   └── handler.ts            Zalo listener; forwards raw events to core-system.
 └── utils/
-    ├── format.ts             HTML escaping, mention application, caption helpers.
+    ├── format.ts             Legacy/local formatting helpers.
     └── media.ts              Temporary file download, cleanup, OGG→M4A conversion.
 ```
 
@@ -316,13 +310,17 @@ src/
 
 ## Data Files
 
+In normal production mode, adapter legacy mapping/cache files are not loaded or written. core-system owns durable topic/message/user/poll/reaction state.
+
+The files below are legacy/debug-only and are used only when `BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=1` is explicitly enabled.
+
 ### `data/topics.json`
 
-Plain JSON. Maps each Zalo conversation ID (group or DM) to its Telegram Forum Topic ID plus metadata (display name, type). Written on every new topic creation; read once at startup.
+Legacy topic mapping cache. Maps each Zalo conversation ID (group or DM) to its Telegram Forum Topic ID plus metadata (display name, type).
 
 ### `data/msg-map.json` (gzipped binary)
 
-Persists the bidirectional mapping between Zalo message IDs and Telegram message IDs so that reply chains survive a process restart. The file is **gzip-compressed** (detected automatically via the `0x1F 0x8B` magic bytes at load time) and uses a compact **v2 format** to minimise I/O.
+Legacy message mapping cache. Persists the bidirectional mapping between Zalo message IDs and Telegram message IDs for local fallback/debug mode. The file is **gzip-compressed** (detected automatically via the `0x1F 0x8B` magic bytes at load time) and uses a compact **v2 format** to minimise I/O.
 
 #### v2 format (written since May 2026)
 

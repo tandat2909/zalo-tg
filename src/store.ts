@@ -19,9 +19,21 @@ interface StoreData {
   zaloIndex: Record<string, number>;
 }
 
-// ── Internal ──────────────────────────────────────────────────────────────────
+// ── Legacy adapter stores ─────────────────────────────────────────────────────
+//
+// These stores are intentionally runtime-only by default. core-system owns all
+// durable bridge state in normal production mode; the adapter may only load/write
+// these JSON files when BRIDGE_LEGACY_STORE_FALLBACK_ENABLED=1 for local legacy
+// debugging together with TELEGRAM_POLLING_ENABLED=1.
 
 const LEGACY_STORES_ENABLED = config.core.legacyStoreFallbackEnabled;
+
+if (LEGACY_STORES_ENABLED) {
+  console.warn('[store] Legacy adapter stores enabled; local mapping/cache JSON files are dev-only and must stay disabled in production core-owned mode.');
+}
+
+export const legacyStoreFallbackEnabled = LEGACY_STORES_ENABLED;
+
 const filePath = path.resolve(config.dataDir, 'topics.json');
 
 function load(): StoreData {
@@ -90,7 +102,9 @@ export const store = {
   },
 };
 
-// ── Message ID mapping (in-memory, not persisted) ─────────────────────────────
+// ── Message ID mapping ────────────────────────────────────────────────────────
+// Runtime-only in normal mode. Disk restore/persist happens only when the
+// explicit legacy fallback flag above is enabled for local debugging.
 
 /**
  * Data needed to quote a Zalo message when replying.
@@ -298,7 +312,9 @@ export const msgStore = {
   },
 };
 
-// ── User cache (persisted to disk, gzip compact) ──────────────────────────────
+// ── User cache ────────────────────────────────────────────────────────────────
+// Runtime-only in normal mode. Disk restore/persist happens only when the
+// explicit legacy fallback flag above is enabled for local debugging.
 //
 // On-disk format (user-cache.json.gz):
 //   { "u": {"uid":"name",...}, "g": {"groupId":{"normName":"uid",...},...} }
@@ -461,7 +477,7 @@ export const aliasCache = {
   },
 };
 
-// ── Friends cache (in-memory, TTL-refreshed) ──────────────────────────────────
+// ── Friends cache (runtime-only, TTL-refreshed) ───────────────────────────────
 
 export interface ZaloFriend {
   userId:      string;
@@ -504,7 +520,7 @@ export const friendsCache = {
   },
 };
 
-// ── Groups cache (in-memory, TTL-refreshed) ───────────────────────────────────
+// ── Groups cache (runtime-only, TTL-refreshed) ────────────────────────────────
 
 export interface ZaloGroup {
   groupId:     string;
@@ -537,7 +553,7 @@ export const groupsCache = {
   },
 };
 
-// ── Sent message store (TG→Zalo direction) ────────────────────────────────────
+// ── Sent message store (TG→Zalo direction, runtime-only) ──────────────────────
 
 export interface SentMsgInfo {
   /** Zalo msgId returned by api.sendMessage / api.sendVoice */
@@ -603,7 +619,7 @@ export const sentMsgStore = {
   },
 };
 
-// ── Reaction summary store (Zalo→TG reaction aggregation) ────────────────────
+// ── Reaction summary store (runtime-only aggregation) ─────────────────────────
 
 export interface ReactionSummaryEntry {
   summaryTgMsgId: number | null;
@@ -789,7 +805,7 @@ export const zaloAlbumStore = {
   },
 };
 
-// ── Poll store (Zalo ↔ TG native poll) ───────────────────────────────────────
+// ── Poll store (runtime-only Zalo ↔ TG native poll state) ─────────────────────
 
 export interface PollEntry {
   pollId:           number;
