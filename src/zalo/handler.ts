@@ -15,7 +15,7 @@ import type { ZaloStyle } from '../utils/format.js';
 import { msgStore, userCache, pollStore, sentMsgStore, zaloAlbumStore, reactionEchoStore, reactionSummaryStore, aliasCache, type ZaloQuoteData } from '../store.js';
 import { tgQueue } from '../utils/tgQueue.js';
 import { reminderTracker } from '../reminders.js';
-import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore } from './core-events.js';
+import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore, type ResolvedStickerMedia } from './core-events.js';
 
 // Proxy that routes every tg.* call through the rate-limit queue
 // so 429 errors are auto-retried instead of crashing the process.
@@ -115,6 +115,21 @@ interface GroupInfoEntry { name: string; avt?: string; ts: number }
 const _groupInfoCache = new Map<string, GroupInfoEntry>();
 const GROUP_INFO_TTL = 5 * 60 * 1000; // 5 min
 
+// Build a name for an unnamed Zalo group by joining member display names —
+// this mirrors how the Zalo client itself shows groups with no custom title.
+function buildGroupMemberName(
+  currentMems: Array<{ id?: string; dName?: string }> | undefined,
+  ownId: string,
+): string {
+  const names = (currentMems ?? [])
+    .filter(m => m && m.id !== ownId)
+    .map(m => (m.dName ?? '').trim())
+    .filter(Boolean);
+  if (names.length === 0) return '';
+  const shown = names.slice(0, 4).join(', ');
+  return names.length > 4 ? `${shown} +${names.length - 4}` : shown;
+}
+
 async function getCachedGroupInfo(
   api: ZaloAPI,
   zaloId: string,
@@ -122,15 +137,27 @@ async function getCachedGroupInfo(
   const hit = _groupInfoCache.get(zaloId);
   if (hit && Date.now() - hit.ts < GROUP_INFO_TTL) return hit;
   try {
-    const info = await api.getGroupInfo(zaloId) as ZaloGroupInfoResponse;
-    const entry: GroupInfoEntry = {
-      name: info?.gridInfoMap?.[zaloId]?.name ?? '',
-      avt:  info?.gridInfoMap?.[zaloId]?.avt,
-      ts:   Date.now(),
+    const info = await api.getGroupInfo(zaloId) as ZaloGroupInfoResponse & {
+      gridInfoMap?: Record<string, {
+        name?: string;
+        avt?: string;
+        currentMems?: Array<{ id?: string; dName?: string }>;
+      }>;
     };
+    const group = info?.gridInfoMap?.[zaloId];
+    let ownId = '';
+    try { ownId = String(api.getOwnId?.() ?? ''); } catch { /* ignore */ }
+    // Prefer the real group title; fall back to joined member names for
+    // unnamed groups so the topic is not named after one random sender.
+    const name = (group?.name ?? '').trim() || buildGroupMemberName(group?.currentMems, ownId);
+    const entry: GroupInfoEntry = { name, avt: group?.avt, ts: Date.now() };
     _groupInfoCache.set(zaloId, entry);
+    console.log(`[Zalo] group info ${zaloId}: name="${name}" (title="${group?.name ?? ''}")`);
     return entry;
-  } catch { return {}; }
+  } catch (err) {
+    console.warn(`[Zalo] getGroupInfo failed for ${zaloId}:`, err);
+    return {};
+  }
 }
 
 // ── Muted group cache (avoid repeated getMute on every message) ───────────────
@@ -212,6 +239,65 @@ async function resolveUserDisplayName(api: ZaloAPI, uid: string | undefined, fal
   // Prefer the caller-supplied fallback (e.g. senderName from message data)
   // over the raw UID — only use UID when no real name is available at all.
   return (fallback && fallback !== 'ai đó') ? fallback : (cleanUid || fallback);
+}
+
+/**
+ * Resolve the conversation name (and avatar) for a Zalo message so core can
+ * create the Telegram topic correctly the first time it sees the thread:
+ *   - Group: real group name from getGroupInfo.
+ *   - DM:    the PEER's name (msg.threadId is the peer UID) with alias applied.
+ * msg.data.dName is only the sender's name, so it is never used directly here.
+ */
+async function resolveThreadInfo(
+  api: ZaloAPI,
+  msg: ZaloMessage,
+): Promise<{ name: string; avatarUrl?: string }> {
+  const zaloId = msg.threadId;
+  const fallbackName = msg.data.dName?.trim() || msg.data.uidFrom || zaloId;
+  if (msg.type === ThreadType.Group) {
+    const info = await getCachedGroupInfo(api, zaloId);
+    const name = info.name?.trim() || fallbackName;
+    if (!info.name?.trim()) {
+      console.warn(`[Zalo→Core] group ${zaloId}: no group name resolved, falling back to sender name "${fallbackName}"`);
+    }
+    return { name, avatarUrl: info.avt };
+  }
+  const realName = await resolveUserDisplayName(api, zaloId, fallbackName);
+  return { name: aliasCache.label(zaloId, realName) };
+}
+
+/**
+ * Resolve a Zalo sticker message into a real image URL via getStickersDetail.
+ * Zalo sticker messages carry only a sticker id, so core cannot show them as
+ * media without this. Static stickers map to a Telegram sticker; animated
+ * stickers (sprite sheet only) map to a photo.
+ */
+async function resolveStickerMedia(
+  api: ZaloAPI,
+  msg: ZaloMessage,
+): Promise<ResolvedStickerMedia | undefined> {
+  if (msg.data.msgType !== ZALO_MSG_TYPES.STICKER) return undefined;
+  const { media } = parseContent(msg.data.content);
+  const stickerId = media.id;
+  if (!stickerId) return undefined;
+  try {
+    const details = await api.getStickersDetail([stickerId]) as Array<{
+      stickerWebpUrl?: string;
+      stickerUrl?: string;
+      stickerSpriteUrl?: string;
+    }>;
+    const detail = details?.[0];
+    const isAnimated = !detail?.stickerWebpUrl && !detail?.stickerUrl && !!detail?.stickerSpriteUrl;
+    const url = detail?.stickerWebpUrl ?? detail?.stickerUrl ?? detail?.stickerSpriteUrl;
+    if (!url) {
+      console.warn(`[Zalo→Core] sticker ${stickerId}: no URL in getStickersDetail`);
+      return undefined;
+    }
+    return { url, mediaType: isAnimated ? 'photo' : 'sticker' };
+  } catch (err) {
+    console.warn('[Zalo→Core] resolveStickerMedia failed:', err);
+    return undefined;
+  }
 }
 
 async function getOrCreateTopic(
@@ -422,8 +508,12 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
 
   api.listener.on('message', async (msg: ZaloMessage) => {
     try {
-      forwardZaloMessageEventToCore(msg);
-      if (config.core.zaloInboundTakeoverEnabled) {
+      // Resolve the real conversation name + sticker URL BEFORE forwarding so
+      // core can name the topic correctly and show stickers as real media.
+      const threadInfo = await resolveThreadInfo(api, msg);
+      const stickerMedia = await resolveStickerMedia(api, msg);
+      forwardZaloMessageEventToCore(msg, threadInfo, stickerMedia);
+      if (!config.core.legacyStoreFallbackEnabled) {
         console.log(`[Zalo→Core] Takeover enabled; skip legacy TG forwarding for thread=${msg.threadId} msgId=${msg.data.msgId}`);
         return;
       }
@@ -506,20 +596,10 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
         ? downloadToTemp(_eagerMediaUrl, `dl_${Date.now()}${_extGuess}`)
         : null;
 
-      // Resolve display name:
-      //   - Group: use group name from getGroupInfo
-      //   - DM: use the PEER's name (zaloId = peer UID), not the sender's name
-      let displayName = senderName;
-      let groupAvatarUrl: string | undefined;
-      if (type === ThreadType.Group) {
-        const info = await getCachedGroupInfo(api, zaloId);
-        displayName = info.name || senderName;
-        groupAvatarUrl = info.avt;
-      } else {
-        // For DMs, zaloId is the peer's UID — resolve their real name then apply alias
-        const realName = await resolveUserDisplayName(api, zaloId, senderName);
-        displayName = aliasCache.label(zaloId, realName);
-      }
+      // Reuse the thread name/avatar already resolved for the core forward
+      // (group name, or DM peer name with alias) — see resolveThreadInfo.
+      const displayName = threadInfo.name || senderName;
+      const groupAvatarUrl = threadInfo.avatarUrl;
 
       const topicId = await getOrCreateTopic(zaloId, type, displayName, groupAvatarUrl);
 
@@ -1255,7 +1335,7 @@ ${escapeHtml(photoCaption)}`
   api.listener.on('undo', async (undo: any) => {
     try {
       forwardZaloRawEventToCore('undo', undo as Record<string, unknown>);
-      if (config.core.zaloInboundTakeoverEnabled) return;
+      if (!config.core.legacyStoreFallbackEnabled) return;
 
       const data = undo?.data;
       // The recalled Zalo message ID.
@@ -1342,8 +1422,16 @@ ${escapeHtml(photoCaption)}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   api.listener.on('reaction', async (reaction: any) => {
     try {
-      forwardZaloRawEventToCore('reaction', reaction as Record<string, unknown>);
-      if (config.core.zaloInboundTakeoverEnabled) return;
+      // Resolve the reactor's real name before forwarding — reaction events
+      // carry no display name, so without this core would show the raw UID.
+      const _rData = reaction?.data;
+      const _rRawName = typeof _rData?.dName === 'string' ? _rData.dName.trim() : '';
+      const _rUid = typeof _rData?.uidFrom === 'string' ? _rData.uidFrom : undefined;
+      const _rResolved = _rRawName || await resolveUserDisplayName(api, _rUid, '');
+      // Drop a result that is just the UID — let core fall back to its cache.
+      const _rActorName = _rResolved && _rResolved !== _rUid ? _rResolved : '';
+      forwardZaloRawEventToCore('reaction', reaction as Record<string, unknown>, _rActorName);
+      if (!config.core.legacyStoreFallbackEnabled) return;
 
       const data = reaction?.data;
       const rIcon: string = data?.content?.rIcon ?? '';
@@ -1430,7 +1518,7 @@ ${escapeHtml(photoCaption)}`
   api.listener.on('group_event', async (event: any) => {
     try {
       forwardZaloRawEventToCore('group_event', event as Record<string, unknown>);
-      if (config.core.zaloInboundTakeoverEnabled) return;
+      if (!config.core.legacyStoreFallbackEnabled) return;
 
       const type    = event?.type as string | undefined;
       const data    = event?.data;
@@ -1555,7 +1643,7 @@ ${escapeHtml(photoCaption)}`
   api.listener.on('friend_event', async (evt: any) => {
     try {
       forwardZaloRawEventToCore('friend_event', evt as Record<string, unknown>);
-      if (config.core.zaloInboundTakeoverEnabled) return;
+      if (!config.core.legacyStoreFallbackEnabled) return;
 
       // Only care about incoming friend request (someone requesting to be our friend)
       if (evt.type !== FriendEventType.REQUEST) return;

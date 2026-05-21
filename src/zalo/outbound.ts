@@ -1,9 +1,10 @@
+import path from 'node:path';
 import { ThreadType } from 'zca-js';
 import { config } from '../config.js';
 import { getZaloApi } from '../zalo/client.js';
 import { tgBot } from '../telegram/bot.js';
 import type { ZaloAPI } from '../zalo/types.js';
-import { downloadToTemp, cleanTemp } from '../utils/media.js';
+import { downloadToTemp, cleanTemp, convertWebmToGif } from '../utils/media.js';
 
 interface OutboundTelegramInfo {
   chat_id: number;
@@ -107,7 +108,7 @@ function normalizeQuote(input?: OutboundZaloQuoteData): Record<string, unknown> 
   };
 }
 
-function filenameFor(content: OutboundContent): string {
+function filenameFor(content: OutboundContent, ext?: string): string {
   if (content.file_name?.trim()) return content.file_name.trim();
   switch (content.type) {
     case 'photo': return 'photo.jpg';
@@ -115,7 +116,10 @@ function filenameFor(content: OutboundContent): string {
     case 'voice': return `voice_${Date.now()}.ogg`;
     case 'audio': return `audio_${Date.now()}.bin`;
     case 'animation': return `animation_${Date.now()}.gif`;
-    case 'sticker': return `sticker_${Date.now()}.webp`;
+    // Stickers can be .webp (static), .tgs (animated Lottie) or .webm (video).
+    // The real extension is taken from the Telegram file path — forcing .webp
+    // makes zca-js treat non-images as images and fail on image metadata.
+    case 'sticker': return `sticker_${Date.now()}${ext || '.webp'}`;
     default: return `file_${Date.now()}.bin`;
   }
 }
@@ -123,7 +127,24 @@ function filenameFor(content: OutboundContent): string {
 async function resolveTelegramFilePath(content: OutboundContent): Promise<string> {
   if (!content.telegram_file_id) throw new Error('Missing telegram_file_id');
   const link = await tgBot.telegram.getFileLink(content.telegram_file_id);
-  return downloadToTemp(link.toString(), filenameFor(content));
+  const linkUrl = link.toString();
+  let realExt = '';
+  try {
+    realExt = path.extname(new URL(linkUrl).pathname).toLowerCase();
+  } catch { /* keep empty */ }
+  let localPath = await downloadToTemp(linkUrl, filenameFor(content, realExt));
+  // Telegram video stickers (.webm) → convert to GIF so Zalo shows the
+  // animation instead of failing as a non-image attachment.
+  if (content.type === 'sticker' && realExt === '.webm') {
+    try {
+      const gifPath = await convertWebmToGif(localPath);
+      await cleanTemp(localPath);
+      localPath = gifPath;
+    } catch (err) {
+      console.warn('[Outbound] webm sticker → gif conversion failed:', err);
+    }
+  }
+  return localPath;
 }
 
 function buildText(input: OutboundZaloMessageRequest): string {

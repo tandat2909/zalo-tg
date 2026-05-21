@@ -324,7 +324,7 @@ export function setupTelegramHandler(
   // Usage from General:    /topic list
   tgBot.command('topic', async (ctx) => {
     if (ctx.chat.id !== config.telegram.groupId) return;
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     const topicId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
       : undefined;
@@ -394,7 +394,7 @@ export function setupTelegramHandler(
 
   tgBot.command('recall', async (ctx) => {
     if (ctx.chat.id !== config.telegram.groupId) return;
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     if (!currentApi) { await ctx.reply('❌ Zalo chưa kết nối'); return; }
 
     const replyTo = 'reply_to_message' in ctx.message
@@ -432,7 +432,7 @@ export function setupTelegramHandler(
 
   tgBot.command('search', async (ctx) => {
     if (ctx.chat.id !== config.telegram.groupId) return;
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
       : undefined;
@@ -579,7 +579,7 @@ export function setupTelegramHandler(
 
   // /addgroup — list all groups without a topic and let user pick
   tgBot.command('addgroup', async (ctx) => {
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     if (ctx.chat.id !== config.telegram.groupId) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
@@ -643,7 +643,7 @@ export function setupTelegramHandler(
 
   // ── /addfriend <số điện thoại> ─────────────────────────────────────────────
   tgBot.command('addfriend', async (ctx) => {
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     if (ctx.chat.id !== config.telegram.groupId) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
@@ -713,7 +713,7 @@ export function setupTelegramHandler(
 
   // ── /friendrequests ────────────────────────────────────────────────────────
   tgBot.command('friendrequests', async (ctx) => {
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     if (ctx.chat.id !== config.telegram.groupId) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
@@ -819,7 +819,7 @@ export function setupTelegramHandler(
 
   // ── /joingroup <link> ──────────────────────────────────────────────────────
   tgBot.command('joingroup', async (ctx) => {
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     if (ctx.chat.id !== config.telegram.groupId) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
@@ -882,7 +882,7 @@ export function setupTelegramHandler(
   // ── /leavegroup ─────────────────────────────────────────────────────────────
   // Phải gửi trong topic của nhóm muốn rời. Hiển thị confirm button.
   tgBot.command('leavegroup', async (ctx) => {
-    if (config.core.telegramCommandTakeoverEnabled) return;
+    if (false) return;
     if (ctx.chat.id !== config.telegram.groupId) return;
     const threadId = 'message_thread_id' in ctx.message
       ? (ctx.message.message_thread_id as number | undefined)
@@ -974,7 +974,7 @@ export function setupTelegramHandler(
 
   tgBot.on('callback_query', async (ctx) => {
     const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
-    if (config.core.telegramCommandTakeoverEnabled && (data?.startsWith('sc:') || data?.startsWith('sg:') || data?.startsWith('lock_poll:') || data?.startsWith('af:') || data?.startsWith('fr:') || data?.startsWith('afr:') || data?.startsWith('jgi:') || data?.startsWith('lg:'))) return;
+    if (false && (data?.startsWith('sc:') || data?.startsWith('sg:') || data?.startsWith('lock_poll:') || data?.startsWith('af:') || data?.startsWith('fr:') || data?.startsWith('afr:') || data?.startsWith('jgi:') || data?.startsWith('lg:'))) return;
 
     if (data?.startsWith('lock_poll:')) {
       const pollId = Number(data.slice('lock_poll:'.length));
@@ -1211,7 +1211,7 @@ export function setupTelegramHandler(
   // Bot phải là admin và allowed_updates phải có "message_reaction"
   tgBot.on('message_reaction', async (ctx) => {
     try {
-      if (config.core.telegramCommandTakeoverEnabled) return;
+      if (false) return;
       if (!currentApi) return;
       const update = ctx.messageReaction;
       if (!update) return;
@@ -1912,7 +1912,7 @@ export function setupTelegramHandler(
       }
 
       if ('poll' in msg && msg.poll) {
-        if (config.core.telegramCommandTakeoverEnabled) return;
+        if (false) return;
         const tgPoll = msg.poll;
         console.log(`[TG→Zalo] Received TG poll: id=${tgPoll.id} question="${tgPoll.question}" is_anonymous=${tgPoll.is_anonymous}`);
 
@@ -2088,7 +2088,7 @@ export function setupTelegramHandler(
 
   tgBot.on('poll', async (ctx) => {
     try {
-      if (config.core.telegramCommandTakeoverEnabled) return;
+      if (false) return;
       const poll = ctx.poll;
       if (!poll.is_closed) return;
       const entry = pollStore.getByTgPollUUID(poll.id);
@@ -2101,7 +2101,7 @@ export function setupTelegramHandler(
 
   tgBot.on('poll_answer', async (ctx) => {
     try {
-      if (config.core.telegramCommandTakeoverEnabled) return;
+      if (false) return;
       const answer = ctx.pollAnswer;
       // answer.option_ids: array of 0-based indices chosen in TG poll
       // answer.poll_id: TG internal poll ID (NOT the Zalo pollId)

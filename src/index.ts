@@ -85,6 +85,18 @@ async function main(): Promise<void> {
   console.log('║   Zalo ↔ Telegram Bridge  v1.0.0    ║');
   console.log('╚══════════════════════════════════════╝');
 
+  // ── Routing info ───────────────────────────────────────────────────────────
+  const forwardUrl = config.core.baseUrl
+    ? `${config.core.baseUrl}/internal/bridge/zalo/events`
+    : '(disabled — CORE_SYSTEM_BASE_URL not set)';
+  console.log('[Boot] ── Routing ────────────────────────────────');
+  console.log(`[Boot]  Zalo → Core   : POST ${forwardUrl}`);
+  console.log(`[Boot]  Core → Zalo   : outbound server http://${config.outbound.host}:${config.outbound.port}/internal/outbound/zalo/messages`);
+  console.log(`[Boot]  Core timeout  : ${config.core.timeoutMs}ms`);
+  console.log(`[Boot]  Internal token: ${config.core.internalToken ? 'set' : 'none'}`);
+  console.log(`[Boot]  Legacy stores : ${config.core.legacyStoreFallbackEnabled ? 'enabled (debug)' : 'disabled (core-owned)'}`);
+  console.log('[Boot] ───────────────────────────────────────────');
+
   const outboundServer = startOutboundServer();
 
   let setZaloApi: (api: Awaited<ReturnType<typeof getZaloApi>>) => void = () => undefined;

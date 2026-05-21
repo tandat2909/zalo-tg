@@ -56,9 +56,9 @@ export const config = {
     baseUrl: process.env.CORE_SYSTEM_BASE_URL?.trim().replace(/\/$/, '') || '',
     internalToken: process.env.BRIDGE_INTERNAL_TOKEN?.trim() || '',
     timeoutMs: envNumber('CORE_SYSTEM_TIMEOUT_MS', 5_000),
-    zaloInboundShadowEnabled: envFlag('CORE_ZALO_INBOUND_SHADOW_ENABLED', true),
-    zaloInboundTakeoverEnabled: envFlag('CORE_ZALO_INBOUND_TAKEOVER_ENABLED', true),
-    telegramCommandTakeoverEnabled: envFlag('CORE_TELEGRAM_COMMAND_TAKEOVER_ENABLED', true),
+    // Step 15: core-system is the production owner. The adapter always forwards
+    // Zalo events to core when CORE_SYSTEM_BASE_URL is configured; old shadow /
+    // takeover / command-takeover switches were removed to avoid split-brain.
     legacyStoreFallbackEnabled: envFlag('BRIDGE_LEGACY_STORE_FALLBACK_ENABLED', false),
   },
   outbound: {
