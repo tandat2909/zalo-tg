@@ -28,7 +28,7 @@ function isAuthorized(req: http.IncomingMessage): boolean {
   return req.headers.authorization === `Bearer ${config.outbound.internalToken}`;
 }
 
-export function startOutboundServer(): http.Server | null {
+export function startOutboundServer(onLoginRequest?: () => void): http.Server | null {
   if (!config.outbound.enabled) return null;
 
   const server = http.createServer(async (req, res) => {
@@ -42,6 +42,17 @@ export function startOutboundServer(): http.Server | null {
 
       if (!isAuthorized(req)) {
         sendJSON(res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/login') {
+        await readBody(req).catch(() => '');
+        if (!onLoginRequest) {
+          sendJSON(res, 503, { ok: false, error: 'login handler not wired' });
+          return;
+        }
+        onLoginRequest();
+        sendJSON(res, 202, { ok: true, status: 'login_triggered' });
         return;
       }
 

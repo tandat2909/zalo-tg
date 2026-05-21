@@ -1,4 +1,4 @@
-import { getZaloApi, resetZaloApi } from './zalo/client.js';
+import { getZaloApi, resetZaloApi, triggerQRLogin } from './zalo/client.js';
 import { CloseReason } from 'zca-js';
 import { setupZaloHandler } from './zalo/handler.js';
 import { tgBot, syncTelegramCommands } from './telegram/bot.js';
@@ -80,6 +80,68 @@ async function startZalo(
   });
 }
 
+// ── /login flow ───────────────────────────────────────────────────────────────
+// Triggered by core via POST /internal/zalo/login. Runs a fresh QR login and
+// sends the QR image straight into the Telegram group via the bot token.
+let _loginInProgress = false;
+
+async function handleLoginRequest(): Promise<void> {
+  if (_loginInProgress) {
+    tgBot.telegram
+      .sendMessage(config.telegram.groupId, 'ℹ️ Đang có phiên đăng nhập Zalo chạy rồi — hãy quét mã QR đã gửi.')
+      .catch(() => undefined);
+    return;
+  }
+  _loginInProgress = true;
+  try {
+    await tgBot.telegram
+      .sendMessage(config.telegram.groupId, '⏳ Đang tạo mã QR đăng nhập Zalo…')
+      .catch(() => undefined);
+
+    const api = await triggerQRLogin({
+      onQRReady: async (imagePath: string) => {
+        await tgBot.telegram
+          .sendPhoto(config.telegram.groupId, { source: imagePath }, {
+            caption: '📲 Mở app Zalo trên điện thoại và quét mã QR này để đăng nhập bridge.',
+          })
+          .catch((err: unknown) => console.error('[Boot] /login send QR failed:', err));
+      },
+      onExpired: async () => {
+        tgBot.telegram
+          .sendMessage(config.telegram.groupId, '♻️ Mã QR đã hết hạn, đang tạo mã mới…')
+          .catch(() => undefined);
+      },
+      onScanned: async (name: string) => {
+        tgBot.telegram
+          .sendMessage(config.telegram.groupId, `✓ Đã quét bởi <b>${name}</b>, đang chờ xác nhận trên điện thoại…`, { parse_mode: 'HTML' })
+          .catch(() => undefined);
+      },
+      onDeclined: async () => {
+        tgBot.telegram
+          .sendMessage(config.telegram.groupId, '❌ Đăng nhập Zalo bị từ chối trên điện thoại.')
+          .catch(() => undefined);
+      },
+    });
+
+    _setZaloApi?.(api);
+    await startZalo(api, true);
+    tgBot.telegram
+      .sendMessage(config.telegram.groupId, '✅ Đăng nhập Zalo thành công — bridge đã hoạt động.')
+      .catch(() => undefined);
+    console.log('[Boot] Zalo login via /login completed ✓');
+  } catch (err) {
+    console.error('[Boot] /login flow failed:', err);
+    tgBot.telegram
+      .sendMessage(
+        config.telegram.groupId,
+        '⚠️ Đăng nhập Zalo thất bại: ' + (err instanceof Error ? err.message : String(err)),
+      )
+      .catch(() => undefined);
+  } finally {
+    _loginInProgress = false;
+  }
+}
+
 async function main(): Promise<void> {
   console.log('╔══════════════════════════════════════╗');
   console.log('║   Zalo ↔ Telegram Bridge  v1.0.0    ║');
@@ -97,7 +159,9 @@ async function main(): Promise<void> {
   console.log(`[Boot]  Legacy stores : ${config.core.legacyStoreFallbackEnabled ? 'enabled (debug)' : 'disabled (core-owned)'}`);
   console.log('[Boot] ───────────────────────────────────────────');
 
-  const outboundServer = startOutboundServer();
+  const outboundServer = startOutboundServer(() => {
+    void handleLoginRequest();
+  });
 
   let setZaloApi: (api: Awaited<ReturnType<typeof getZaloApi>>) => void = () => undefined;
   if (config.telegram.pollingEnabled && !config.core.legacyStoreFallbackEnabled) {
