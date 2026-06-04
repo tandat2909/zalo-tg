@@ -1518,6 +1518,35 @@ ${escapeHtml(photoCaption)}`
   api.listener.on('group_event', async (event: any) => {
     try {
       forwardZaloRawEventToCore('group_event', event as Record<string, unknown>);
+
+      // Khi bot vừa được add vào group → replay lịch sử chat về core để
+      // agentdesk có context ngay mà không cần chờ tin nhắn mới.
+      {
+        const evType = event?.type as string | undefined;
+        const evData = event?.data as Record<string, unknown> | undefined;
+        const evGroupId = String(event?.threadId ?? evData?.groupId ?? '');
+        if (evType === 'join' && evGroupId) {
+          const evMembers = (evData?.updateMembers ?? []) as Array<{ uid?: string; id?: string }>;
+          let botUid = '';
+          try { botUid = String(api.getOwnId?.() ?? ''); } catch { /* ignore */ }
+          if (botUid && evMembers.some(m => String(m.uid ?? m.id ?? '') === botUid)) {
+            void (async () => {
+              try {
+                const threadInfo = await getCachedGroupInfo(api, evGroupId);
+                const history = await api.getGroupChatHistory(evGroupId, 50) as { groupMsgs?: unknown[] };
+                const msgs = history?.groupMsgs ?? [];
+                console.log(`[ZaloHandler] Bot joined group ${evGroupId}, forwarding ${msgs.length} history msgs to core`);
+                for (const msg of msgs) {
+                  forwardZaloMessageEventToCore(msg as ZaloMessage, threadInfo);
+                }
+              } catch (err) {
+                console.warn(`[ZaloHandler] History replay failed for group ${evGroupId}:`, err);
+              }
+            })();
+          }
+        }
+      }
+
       if (!config.core.legacyStoreFallbackEnabled) return;
 
       const type    = event?.type as string | undefined;
