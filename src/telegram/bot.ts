@@ -13,6 +13,8 @@ const BOT_COMMANDS = [
   { command: 'remind',         description: 'Nhắc nhở khi tin Zalo chưa được trả lời sau X phút' },
   { command: 'autoreply',      description: 'Đặt tin nhắn tự trả lời Zalo cho từng topic' },
   { command: 'topic',          description: 'Quản lý topic: list | info | delete' },
+  { command: 'synchistory',    description: 'Kéo lịch sử chat Zalo của topic về (tối đa N tin)' },
+  { command: 'recall',         description: 'Thu hồi tin Zalo đã gửi (reply vào tin rồi gõ lệnh)' },
   { command: 'addgroup',       description: 'Tạo nhóm Zalo mới từ topic hiện tại' },
   { command: 'addfriend',      description: 'Gửi lời mời kết bạn Zalo' },
   { command: 'friendrequests', description: 'Xem & duyệt lời mời kết bạn đang chờ' },

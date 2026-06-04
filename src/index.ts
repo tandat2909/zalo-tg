@@ -187,19 +187,9 @@ async function main(): Promise<void> {
   }
 
   // ── Register bot commands for Telegram menu ───────────────────────────────
-  tgBot.telegram.setMyCommands([
-    { command: 'login',          description: 'Đăng nhập Zalo qua QR code' },
-    { command: 'search',         description: 'Tìm bạn bè / nhóm Zalo để tạo topic' },
-    { command: 'addfriend',      description: 'Tìm & kết bạn Zalo theo số điện thoại' },
-    { command: 'addgroup',       description: 'Tạo topic cho nhóm Zalo chưa có topic' },
-    { command: 'joingroup',      description: 'Tham gia nhóm Zalo qua link' },
-    { command: 'leavegroup',     description: 'Rời nhóm Zalo & đóng topic (dùng trong topic nhóm)' },
-    { command: 'friendrequests', description: 'Xem lời mời kết bạn & lời mời nhóm' },
-    { command: 'topic',          description: 'Quản lý topic: list / info / delete' },
-    { command: 'remind',         description: 'Nhắc nhở khi tin Zalo chưa được trả lời sau X phút' },
-    { command: 'autoreply',      description: 'Đặt tin nhắn tự trả lời Zalo cho từng topic' },
-    { command: 'status',         description: 'Xem trạng thái bridge: uptime, số topic, Zalo' },
-  ]).catch(() => undefined);
+  // Nguồn duy nhất: BOT_COMMANDS trong telegram/bot.ts (dùng cho cả webhook
+  // lẫn polling). Tránh hardcode trùng lặp khiến menu lệch khi thêm command.
+  syncTelegramCommands().catch(() => undefined);
 
   const startZaloInBackground = () => {
     getZaloApi()

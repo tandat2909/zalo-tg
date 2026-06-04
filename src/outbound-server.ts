@@ -2,6 +2,7 @@ import http from 'http';
 import { config } from './config.js';
 import { sendOutboundZaloMessage, type OutboundZaloMessageRequest } from './zalo/outbound.js';
 import { getZaloApi } from './zalo/client.js';
+import { replayZaloGroupHistory } from './zalo/history.js';
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -172,6 +173,14 @@ export function startOutboundServer(onLoginRequest?: () => void): http.Server | 
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/internal/zalo/groups/sync-history') {
+        const body = await readBody(req);
+        const input = JSON.parse(body) as { group_id?: string; count?: number };
+        const result = await syncGroupHistory(input.group_id ?? '', input.count ?? 200);
+        sendJSON(res, 200, result);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/internal/zalo/polls') {
         const body = await readBody(req);
         const input = JSON.parse(body) as { group_id?: string; question?: string; options?: string[]; is_anonymous?: boolean; allow_multi_choices?: boolean };
@@ -326,6 +335,15 @@ export function startOutboundServer(onLoginRequest?: () => void): http.Server | 
           ...(phone ? { phone } : {}),
           raw_json: user,
         };
+      }
+
+      async function syncGroupHistory(groupId: string, count: number): Promise<unknown> {
+        const cleanGroupId = groupId.trim();
+        if (!cleanGroupId) throw new Error('Missing group_id');
+        const api = await getZaloApi();
+        const safeCount = Math.min(Math.max(Math.floor(count) || 200, 1), 1000);
+        const { messages, members } = await replayZaloGroupHistory(api, cleanGroupId, safeCount);
+        return { ok: true, group_id: cleanGroupId, messages, members };
       }
 
       async function findZaloUser(phone: string): Promise<unknown> {

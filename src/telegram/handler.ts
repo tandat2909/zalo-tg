@@ -12,6 +12,7 @@ import { tgBot } from './bot.js';
 import { config } from '../config.js';
 import { downloadToTemp, cleanTemp, convertToM4a, extractVideoThumbnail, convertWebmToGif } from '../utils/media.js';
 import { triggerQRLogin } from '../zalo/client.js';
+import { replayZaloGroupHistory } from '../zalo/history.js';
 import { sendTelegramToZaloWebhook } from '../zalo/webhook.js';
 import { escapeHtml } from '../utils/format.js';
 import { registerReminderCommands, reminderTracker } from '../reminders.js';
@@ -390,6 +391,58 @@ export function setupTelegramHandler(
       '❓ Dùng: <code>/topic list</code> | <code>/topic info</code> | <code>/topic delete</code>',
       { ...replyOpts, parse_mode: 'HTML' },
     );
+  });
+
+  // /synchistory – kéo toàn bộ lịch sử chat Zalo của topic hiện tại về core.
+  // Usage trong topic:  /synchistory [số_tin]   (mặc định 200)
+  tgBot.command('synchistory', async (ctx) => {
+    if (ctx.chat.id !== config.telegram.groupId) return;
+    const topicId = 'message_thread_id' in ctx.message
+      ? (ctx.message.message_thread_id as number | undefined)
+      : undefined;
+    const replyOpts = topicId ? { message_thread_id: topicId } : {};
+
+    if (!currentApi) {
+      await ctx.telegram.sendMessage(config.telegram.groupId, '❌ Zalo chưa kết nối', replyOpts);
+      return;
+    }
+    if (!topicId) {
+      await ctx.telegram.sendMessage(config.telegram.groupId, '⚠️ Lệnh này phải được gửi trong một topic cụ thể.', replyOpts);
+      return;
+    }
+    const entry = store.getEntryByTopic(topicId);
+    if (!entry) {
+      await ctx.telegram.sendMessage(config.telegram.groupId, '❌ Topic này chưa được map với Zalo.', replyOpts);
+      return;
+    }
+    if (entry.type !== 1) {
+      await ctx.telegram.sendMessage(config.telegram.groupId, '⚠️ Chỉ hỗ trợ kéo lịch sử cho nhóm Zalo (không phải chat 1-1).', replyOpts);
+      return;
+    }
+
+    const arg = (ctx.message.text ?? '').split(/\s+/)[1];
+    const count = Math.min(Math.max(parseInt(arg ?? '', 10) || 200, 1), 1000);
+
+    await ctx.telegram.sendMessage(
+      config.telegram.groupId,
+      `⏳ Đang kéo tối đa <b>${count}</b> tin lịch sử của <b>${escapeHtml(entry.name)}</b> về core...`,
+      { ...replyOpts, parse_mode: 'HTML' },
+    );
+    try {
+      const { messages, members } = await replayZaloGroupHistory(currentApi, entry.zaloId, count);
+      await ctx.telegram.sendMessage(
+        config.telegram.groupId,
+        `✅ Đã đồng bộ <b>${messages}</b> tin + <b>${members}</b> thành viên về core (chỉ lưu context, không gửi lại Telegram).`,
+        { ...replyOpts, parse_mode: 'HTML' },
+      );
+    } catch (err) {
+      console.error('[/synchistory] failed:', err);
+      await ctx.telegram.sendMessage(
+        config.telegram.groupId,
+        `❌ Kéo lịch sử thất bại: ${escapeHtml(err instanceof Error ? err.message : String(err))}`,
+        { ...replyOpts, parse_mode: 'HTML' },
+      );
+    }
   });
 
   tgBot.command('recall', async (ctx) => {

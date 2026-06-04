@@ -15,7 +15,8 @@ import type { ZaloStyle } from '../utils/format.js';
 import { msgStore, userCache, pollStore, sentMsgStore, zaloAlbumStore, reactionEchoStore, reactionSummaryStore, aliasCache, type ZaloQuoteData } from '../store.js';
 import { tgQueue } from '../utils/tgQueue.js';
 import { reminderTracker } from '../reminders.js';
-import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore, forwardGroupMembersToCore, type ResolvedStickerMedia } from './core-events.js';
+import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore, type ResolvedStickerMedia } from './core-events.js';
+import { replayZaloGroupHistory } from './history.js';
 
 // Proxy that routes every tg.* call through the rate-limit queue
 // so 429 errors are auto-retried instead of crashing the process.
@@ -1532,32 +1533,8 @@ ${escapeHtml(photoCaption)}`
           if (botUid && evMembers.some(m => String(m.uid ?? m.id ?? '') === botUid)) {
             void (async () => {
               try {
-                const threadInfo = await getCachedGroupInfo(api, evGroupId);
-                // Sync toàn bộ member list về agentdesk trước khi replay history
-                try {
-                  const groupInfoRes = await api.getGroupInfo(evGroupId) as {
-                    gridInfoMap?: Record<string, { currentMems?: Array<{ id?: string; dName?: string; zaloName?: string; avatar?: string }> }>;
-                  };
-                  const currentMems = groupInfoRes?.gridInfoMap?.[evGroupId]?.currentMems ?? [];
-                  const members = currentMems
-                    .map(m => ({ uid: String(m.id ?? ''), name: String(m.dName ?? ''), zalo_name: m.zaloName, avatar: m.avatar }))
-                    .filter(m => m.uid && m.name);
-                  if (members.length > 0) await forwardGroupMembersToCore(evGroupId, members);
-                } catch (err) {
-                  console.warn(`[ZaloHandler] Sync members failed for group ${evGroupId}:`, err);
-                }
-                // Replay lịch sử chat — getGroupChatHistory trả về mới-nhất-trước,
-                // sort tăng dần theo ts để core lưu đúng thứ tự thời gian.
-                // replay=true: core chỉ lưu DB làm context, không đẩy lại Telegram
-                // (tránh rate-limit) và không kích hoạt orchestration trên tin cũ.
-                const history = await api.getGroupChatHistory(evGroupId, 50) as { groupMsgs?: ZaloMessage[] };
-                const msgs = (history?.groupMsgs ?? []).slice().sort(
-                  (a, b) => Number(a?.data?.ts ?? 0) - Number(b?.data?.ts ?? 0),
-                );
-                console.log(`[ZaloHandler] Bot joined group ${evGroupId}, forwarding ${msgs.length} history msgs to core (replay)`);
-                for (const msg of msgs) {
-                  forwardZaloMessageEventToCore(msg, threadInfo, undefined, true);
-                }
+                const { messages, members } = await replayZaloGroupHistory(api, evGroupId, 50);
+                console.log(`[ZaloHandler] Bot joined group ${evGroupId}, replayed ${messages} msgs + ${members} members to core`);
               } catch (err) {
                 console.warn(`[ZaloHandler] History replay failed for group ${evGroupId}:`, err);
               }
