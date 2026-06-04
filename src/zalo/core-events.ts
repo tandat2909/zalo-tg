@@ -183,6 +183,37 @@ export function forwardZaloMessageEventToCore(
   void postZaloEvent(buildMessageEvent(msg, threadInfo, stickerMedia));
 }
 
+export interface GroupMemberPayload {
+  uid: string;
+  name: string;
+  zalo_name?: string;
+  avatar?: string;
+}
+
+export async function forwardGroupMembersToCore(
+  groupId: string,
+  members: GroupMemberPayload[],
+): Promise<void> {
+  if (!config.core.baseUrl || members.length === 0) return;
+  try {
+    await axios.post(
+      `${config.core.baseUrl}/internal/bridge/zalo/groups/${encodeURIComponent(groupId)}/members`,
+      { members },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(config.core.internalToken ? { Authorization: `Bearer ${config.core.internalToken}` } : {}),
+        },
+        timeout: config.core.timeoutMs,
+      },
+    );
+    console.log(`[Zalo→Core] Synced ${members.length} members for group ${groupId}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Zalo→Core] Sync group members failed group_id=${groupId}: ${msg}`);
+  }
+}
+
 export function forwardZaloRawEventToCore(
   eventType: 'group_event' | 'friend_event' | 'undo' | 'reaction',
   event: Record<string, unknown>,

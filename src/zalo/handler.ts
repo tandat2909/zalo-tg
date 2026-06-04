@@ -15,7 +15,7 @@ import type { ZaloStyle } from '../utils/format.js';
 import { msgStore, userCache, pollStore, sentMsgStore, zaloAlbumStore, reactionEchoStore, reactionSummaryStore, aliasCache, type ZaloQuoteData } from '../store.js';
 import { tgQueue } from '../utils/tgQueue.js';
 import { reminderTracker } from '../reminders.js';
-import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore, type ResolvedStickerMedia } from './core-events.js';
+import { forwardZaloMessageEventToCore, forwardZaloRawEventToCore, forwardGroupMembersToCore, type ResolvedStickerMedia } from './core-events.js';
 
 // Proxy that routes every tg.* call through the rate-limit queue
 // so 429 errors are auto-retried instead of crashing the process.
@@ -1533,6 +1533,20 @@ ${escapeHtml(photoCaption)}`
             void (async () => {
               try {
                 const threadInfo = await getCachedGroupInfo(api, evGroupId);
+                // Sync toàn bộ member list về agentdesk trước khi replay history
+                try {
+                  const groupInfoRes = await api.getGroupInfo(evGroupId) as {
+                    gridInfoMap?: Record<string, { currentMems?: Array<{ id?: string; dName?: string; zaloName?: string; avatar?: string }> }>;
+                  };
+                  const currentMems = groupInfoRes?.gridInfoMap?.[evGroupId]?.currentMems ?? [];
+                  const members = currentMems
+                    .map(m => ({ uid: String(m.id ?? ''), name: String(m.dName ?? ''), zalo_name: m.zaloName, avatar: m.avatar }))
+                    .filter(m => m.uid && m.name);
+                  if (members.length > 0) await forwardGroupMembersToCore(evGroupId, members);
+                } catch (err) {
+                  console.warn(`[ZaloHandler] Sync members failed for group ${evGroupId}:`, err);
+                }
+                // Replay lịch sử chat
                 const history = await api.getGroupChatHistory(evGroupId, 50) as { groupMsgs?: unknown[] };
                 const msgs = history?.groupMsgs ?? [];
                 console.log(`[ZaloHandler] Bot joined group ${evGroupId}, forwarding ${msgs.length} history msgs to core`);
