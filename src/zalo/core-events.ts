@@ -27,6 +27,8 @@ interface CoreZaloEventPayload {
   sender_uid?: string;
   sender_name?: string;
   is_self: boolean;
+  /** Tin lịch sử replay khi bot mới join group — core chỉ lưu DB, không đẩy Telegram. */
+  replay?: boolean;
   message: CoreZaloEventMessage;
   raw_json: Record<string, unknown>;
 }
@@ -94,7 +96,7 @@ function buildMessagePayload(msg: ZaloMessage, stickerMedia?: ResolvedStickerMed
   };
 }
 
-function buildMessageEvent(msg: ZaloMessage, threadInfo?: ResolvedThreadInfo, stickerMedia?: ResolvedStickerMedia): CoreZaloEventPayload {
+function buildMessageEvent(msg: ZaloMessage, threadInfo?: ResolvedThreadInfo, stickerMedia?: ResolvedStickerMedia, replay?: boolean): CoreZaloEventPayload {
   const threadType = msg.type as 0 | 1;
   const primaryId = msg.data.realMsgId || msg.data.msgId || msg.data.cliMsgId || msg.data.ts;
   // thread_name must be the conversation name (group name or DM peer name) so
@@ -112,6 +114,7 @@ function buildMessageEvent(msg: ZaloMessage, threadInfo?: ResolvedThreadInfo, st
     thread_name: threadName,
     thread_avatar: threadInfo?.avatarUrl,
     is_self: msg.isSelf,
+    ...(replay ? { replay: true } : {}),
     message: buildMessagePayload(msg, stickerMedia),
     raw_json: msg as unknown as Record<string, unknown>,
   };
@@ -179,8 +182,9 @@ export function forwardZaloMessageEventToCore(
   msg: ZaloMessage,
   threadInfo?: ResolvedThreadInfo,
   stickerMedia?: ResolvedStickerMedia,
+  replay?: boolean,
 ): void {
-  void postZaloEvent(buildMessageEvent(msg, threadInfo, stickerMedia));
+  void postZaloEvent(buildMessageEvent(msg, threadInfo, stickerMedia, replay));
 }
 
 export interface GroupMemberPayload {

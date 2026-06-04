@@ -1546,12 +1546,17 @@ ${escapeHtml(photoCaption)}`
                 } catch (err) {
                   console.warn(`[ZaloHandler] Sync members failed for group ${evGroupId}:`, err);
                 }
-                // Replay lịch sử chat
-                const history = await api.getGroupChatHistory(evGroupId, 50) as { groupMsgs?: unknown[] };
-                const msgs = history?.groupMsgs ?? [];
-                console.log(`[ZaloHandler] Bot joined group ${evGroupId}, forwarding ${msgs.length} history msgs to core`);
+                // Replay lịch sử chat — getGroupChatHistory trả về mới-nhất-trước,
+                // sort tăng dần theo ts để core lưu đúng thứ tự thời gian.
+                // replay=true: core chỉ lưu DB làm context, không đẩy lại Telegram
+                // (tránh rate-limit) và không kích hoạt orchestration trên tin cũ.
+                const history = await api.getGroupChatHistory(evGroupId, 50) as { groupMsgs?: ZaloMessage[] };
+                const msgs = (history?.groupMsgs ?? []).slice().sort(
+                  (a, b) => Number(a?.data?.ts ?? 0) - Number(b?.data?.ts ?? 0),
+                );
+                console.log(`[ZaloHandler] Bot joined group ${evGroupId}, forwarding ${msgs.length} history msgs to core (replay)`);
                 for (const msg of msgs) {
-                  forwardZaloMessageEventToCore(msg as ZaloMessage, threadInfo);
+                  forwardZaloMessageEventToCore(msg, threadInfo, undefined, true);
                 }
               } catch (err) {
                 console.warn(`[ZaloHandler] History replay failed for group ${evGroupId}:`, err);
