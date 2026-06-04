@@ -175,8 +175,8 @@ export function startOutboundServer(onLoginRequest?: () => void): http.Server | 
 
       if (req.method === 'POST' && url.pathname === '/internal/zalo/groups/sync-history') {
         const body = await readBody(req);
-        const input = JSON.parse(body) as { group_id?: string; count?: number };
-        const result = await syncGroupHistory(input.group_id ?? '', input.count ?? 200);
+        const input = JSON.parse(body) as { group_id?: string; count?: number; to_telegram?: boolean };
+        const result = await syncGroupHistory(input.group_id ?? '', input.count ?? 200, Boolean(input.to_telegram));
         sendJSON(res, 200, result);
         return;
       }
@@ -337,12 +337,12 @@ export function startOutboundServer(onLoginRequest?: () => void): http.Server | 
         };
       }
 
-      async function syncGroupHistory(groupId: string, count: number): Promise<unknown> {
+      async function syncGroupHistory(groupId: string, count: number, toTelegram: boolean): Promise<unknown> {
         const cleanGroupId = groupId.trim();
         if (!cleanGroupId) throw new Error('Missing group_id');
         const api = await getZaloApi();
         const safeCount = Math.min(Math.max(Math.floor(count) || 200, 1), 1000);
-        const { messages, members } = await replayZaloGroupHistory(api, cleanGroupId, safeCount);
+        const { messages, members } = await replayZaloGroupHistory(api, cleanGroupId, safeCount, toTelegram);
         return { ok: true, group_id: cleanGroupId, messages, members };
       }
 

@@ -513,7 +513,7 @@ export async function setupZaloHandler(api: ZaloAPI): Promise<void> {
       // core can name the topic correctly and show stickers as real media.
       const threadInfo = await resolveThreadInfo(api, msg);
       const stickerMedia = await resolveStickerMedia(api, msg);
-      forwardZaloMessageEventToCore(msg, threadInfo, stickerMedia);
+      void forwardZaloMessageEventToCore(msg, threadInfo, stickerMedia);
       if (!config.core.legacyStoreFallbackEnabled) {
         console.log(`[Zalo→Core] Takeover enabled; skip legacy TG forwarding for thread=${msg.threadId} msgId=${msg.data.msgId}`);
         return;

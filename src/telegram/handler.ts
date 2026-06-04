@@ -420,19 +420,28 @@ export function setupTelegramHandler(
       return;
     }
 
-    const arg = (ctx.message.text ?? '').split(/\s+/)[1];
-    const count = Math.min(Math.max(parseInt(arg ?? '', 10) || 200, 1), 1000);
+    // Args: /synchistory [số_tin] [tg]  — "tg"/"telegram" để đẩy luôn vào topic.
+    let count = 200;
+    let toTelegram = false;
+    for (const tok of (ctx.message.text ?? '').split(/\s+/).slice(1)) {
+      const low = tok.toLowerCase();
+      if (low === 'tg' || low === 'telegram' || low === 'send') toTelegram = true;
+      else { const n = parseInt(tok, 10); if (n > 0) count = n; }
+    }
+    count = Math.min(Math.max(count, 1), 1000);
 
     await ctx.telegram.sendMessage(
       config.telegram.groupId,
-      `⏳ Đang kéo tối đa <b>${count}</b> tin lịch sử của <b>${escapeHtml(entry.name)}</b> về core...`,
+      `⏳ Đang kéo tối đa <b>${count}</b> tin lịch sử của <b>${escapeHtml(entry.name)}</b> về core${toTelegram ? ' (đẩy vào topic)' : ''}...`,
       { ...replyOpts, parse_mode: 'HTML' },
     );
     try {
-      const { messages, members } = await replayZaloGroupHistory(currentApi, entry.zaloId, count);
+      const { messages, members } = await replayZaloGroupHistory(currentApi, entry.zaloId, count, toTelegram);
       await ctx.telegram.sendMessage(
         config.telegram.groupId,
-        `✅ Đã đồng bộ <b>${messages}</b> tin + <b>${members}</b> thành viên về core (chỉ lưu context, không gửi lại Telegram).`,
+        toTelegram
+          ? `✅ Đã đồng bộ <b>${messages}</b> tin + <b>${members}</b> thành viên và đẩy vào topic.`
+          : `✅ Đã đồng bộ <b>${messages}</b> tin + <b>${members}</b> thành viên về core (chỉ lưu context). Thêm <code>tg</code> để đẩy vào topic.`,
         { ...replyOpts, parse_mode: 'HTML' },
       );
     } catch (err) {

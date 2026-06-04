@@ -20,11 +20,14 @@ export interface ReplayResult {
  * nên "toàn bộ" thực tế bị giới hạn bởi `count` tin gần nhất.
  *
  * @param count số tin tối đa kéo về (mặc định 200)
+ * @param toTelegram nếu true: đẩy tin vào topic Telegram (gửi tuần tự + delay
+ *   để giữ thứ tự và tránh rate-limit). Mặc định false (chỉ lưu DB).
  */
 export async function replayZaloGroupHistory(
   api: ZaloAPI,
   groupId: string,
   count = 200,
+  toTelegram = false,
 ): Promise<ReplayResult> {
   let threadInfo: ResolvedThreadInfo | undefined;
   let members = 0;
@@ -59,8 +62,18 @@ export async function replayZaloGroupHistory(
   const msgs = (history?.groupMsgs ?? []).slice().sort(
     (a, b) => Number(a?.data?.ts ?? 0) - Number(b?.data?.ts ?? 0),
   );
-  for (const msg of msgs) {
-    forwardZaloMessageEventToCore(msg, threadInfo, undefined, true);
+
+  if (toTelegram) {
+    // Gửi tuần tự + delay: giữ đúng thứ tự trong topic và giảm rủi ro
+    // rate-limit Telegram khi đẩy hàng loạt tin cũ.
+    for (const msg of msgs) {
+      await forwardZaloMessageEventToCore(msg, threadInfo, undefined, { replay: true, replayToTelegram: true });
+      await new Promise(r => setTimeout(r, 350));
+    }
+  } else {
+    for (const msg of msgs) {
+      void forwardZaloMessageEventToCore(msg, threadInfo, undefined, { replay: true });
+    }
   }
 
   return { messages: msgs.length, members };
